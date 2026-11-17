@@ -192,6 +192,8 @@ public static class OmniWin32
     private static extern bool SystemParametersInfo(uint action, uint parameter, string value, uint flags);
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
+    [DllImport("powrprof.dll", SetLastError = true)]
+    private static extern bool SetSuspendState(bool hibernate, bool forceCritical, bool disableWakeEvent);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder imageName, ref int size);
     [DllImport("kernel32.dll")]
@@ -780,6 +782,20 @@ public static class OmniWin32
         return updated;
     }
 
+    public static bool SetZOrder(long hwnd, string layer)
+    {
+        IntPtr insertAfter;
+        if (layer == "top") insertAfter = new IntPtr(-1);
+        else if (layer == "bottom") insertAfter = new IntPtr(1);
+        else if (layer == "normal") insertAfter = new IntPtr(-2);
+        else throw new ArgumentException("Unsupported window layer: " + layer);
+
+        bool updated = SetWindowPos(new IntPtr(hwnd), insertAfter, 0, 0, 0, 0, 0x0213);
+        if (!updated && Marshal.GetLastWin32Error() == 5)
+            throw new UnauthorizedAccessException("access_denied");
+        return updated;
+    }
+
     public static bool SetDesktop(long hwnd, int x, int y, int width, int height)
     {
         IntPtr previousDpiContext = SetThreadDpiAwarenessContext(new IntPtr(-3));
@@ -1074,6 +1090,15 @@ public static class OmniWin32
     public static bool LaunchElevated(string executable, string parameters, string directory)
     {
         return ShellExecute(IntPtr.Zero, "runas", executable, parameters, directory, 1).ToInt64() > 32;
+    }
+
+    public static bool SuspendComputer()
+    {
+        bool suspended = SetSuspendState(false, false, false);
+        if (!suspended)
+            throw new InvalidOperationException("SetSuspendState failed: "
+                + Marshal.GetLastWin32Error().ToString(CultureInfo.InvariantCulture));
+        return true;
     }
 
     public static bool ToggleMaximize(long hwnd)

@@ -500,6 +500,10 @@ while ($null -ne ($line = $reader.ReadLine())) {
                     [long]$request.hwnd, [int]$request.x, [int]$request.y,
                     [int]$request.width, [int]$request.height)
             }
+            'z-order' {
+                [OmniWin32]::SetZOrder(
+                    [long]$request.hwnd, [string]$request.layer)
+            }
             'prepare-drag' {
                 [OmniWin32]::PrepareDrag(
                     [long]$request.hwnd, [string]$request.mode, [string]$request.direction)
@@ -521,6 +525,7 @@ while ($null -ne ($line = $reader.ReadLine())) {
             'minimize' { [OmniWin32]::Minimize([long]$request.hwnd) }
             'maximize' { [OmniWin32]::Maximize([long]$request.hwnd, [bool]$request.maximize) }
             'toggle-maximize' { [OmniWin32]::ToggleMaximize([long]$request.hwnd) }
+            'suspend' { [OmniWin32]::SuspendComputer() }
             'close'  { [OmniWin32]::Close([long]$request.hwnd) }
             'elevate' {
                 if ($PipeName) { throw 'elevation_not_available_from_helper' }

@@ -1,11 +1,16 @@
 import electronPkg from 'electron';
-const { app, ipcMain, BrowserWindow, screen, shell } = electronPkg;
+const { ipcMain, BrowserWindow, screen, shell, dialog } = electronPkg;
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import os from 'os';
 import {
   listWindows,
   getWindowById,
   listDevTools,
   registerOwnWindow,
   unregisterOwnWindow,
+  registerShellWindow,
+  unregisterShellWindow,
 } from './ipc_windowManager.js';
 import {
   getNativeState,
@@ -13,7 +18,9 @@ import {
   closeWindowById,
   minimizeWindowById,
   maximizeWindowById,
+  setWindowZOrderById,
   recoverWindowsShell,
+  suspendWindows,
 } from './ipc_nativeWindows.js';
 import {
   openOverview, closeOverview, toggleOverview, isOverviewOpen,
@@ -21,6 +28,8 @@ import {
 
 let cachedApps = [];
 let windowSettingsWin = null;
+let powerMenuWindow = null;
+const execFileAsync = promisify(execFile);
 
 /* ------------------------------------------------------------------ */
 /* Topbar geometry                                                     */
@@ -255,6 +264,126 @@ function openWindowSettings(windowId) {
   windowSettingsWin = win;
 }
 
+function closePowerMenu() {
+  if (!powerMenuWindow || powerMenuWindow.isDestroyed()) {
+    powerMenuWindow = null;
+    return;
+  }
+  powerMenuWindow.close();
+}
+
+function openPowerMenu() {
+  if (powerMenuWindow && !powerMenuWindow.isDestroyed()) {
+    powerMenuWindow.focus();
+    return;
+  }
+
+  const display = screen.getPrimaryDisplay();
+  const { x, y, width, height } = display.bounds;
+  const top = y + TOPBAR_HEIGHT;
+  const win = new BrowserWindow({
+    x,
+    y: top,
+    width,
+    height: Math.max(1, height - TOPBAR_HEIGHT),
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    show: false,
+    hasShadow: false,
+    type: 'toolbar',
+    webPreferences: {
+      preload: global.paths.reactPreload,
+      nodeIntegration: false,
+      contextIsolation: true,
+      webSecurity: true,
+      transparent: true,
+      backgroundColor: '#00000000',
+    },
+  });
+
+  powerMenuWindow = win;
+  try { win.setAlwaysOnTop(true, 'screen-saver'); } catch (error) {
+    console.warn('[power-menu] failed to set overlay z-order:', error.message);
+  }
+  win.loadURL(global.paths.powerMenuIndex).catch((error) => {
+    console.error('[power-menu] failed to load menu:', error.message);
+    closePowerMenu();
+  });
+  try {
+    registerShellWindow(win, '__power_menu__', { title: 'Power Menu' });
+  } catch (error) {
+    console.error('[power-menu] failed to register overlay window:', error.message);
+  }
+  win.once('ready-to-show', () => {
+    if (win.isDestroyed()) return;
+    win.show();
+    win.focus();
+  });
+  win.on('closed', () => {
+    try { unregisterShellWindow('__power_menu__'); } catch (error) {
+      console.error('[power-menu] failed to unregister overlay window:', error.message);
+    }
+    if (powerMenuWindow === win) powerMenuWindow = null;
+  });
+}
+
+async function performPowerAction(action) {
+  if (process.platform === 'win32') {
+    if (action === 'sleep') return suspendWindows();
+    const args = {
+      logout: ['/l'],
+      shutdown: ['/s', '/t', '0'],
+      restart: ['/r', '/t', '0'],
+    }[action];
+    if (!args) throw new Error(`Unsupported power action: ${action}`);
+    const executable = `${process.env.WINDIR || 'C:\\Windows'}\\System32\\shutdown.exe`;
+    await execFileAsync(executable, args, { windowsHide: true, timeout: 10000 });
+    return true;
+  }
+
+  if (process.platform === 'linux') {
+    if (action === 'sleep') {
+      await execFileAsync('systemctl', ['suspend'], { timeout: 15000 });
+    } else if (action === 'shutdown' || action === 'restart') {
+      await execFileAsync('systemctl', [action === 'shutdown' ? 'poweroff' : 'reboot'], {
+        timeout: 15000,
+      });
+    } else if (action === 'logout') {
+      const sessionId = process.env.XDG_SESSION_ID;
+      if (sessionId) {
+        await execFileAsync('loginctl', ['terminate-session', sessionId], { timeout: 15000 });
+      } else {
+        await execFileAsync('loginctl', ['terminate-user', os.userInfo().username], { timeout: 15000 });
+      }
+    } else {
+      throw new Error(`Unsupported power action: ${action}`);
+    }
+    return true;
+  }
+
+  throw new Error(`Power actions are not supported on ${process.platform}`);
+}
+
+function schedulePowerAction(action) {
+  setTimeout(() => {
+    performPowerAction(action).catch((error) => {
+      console.error(`[power-menu] ${action} failed:`, error.message);
+      dialog.showErrorBox(
+        'Не удалось выполнить действие питания',
+        `${action}: ${error.message}`,
+      );
+    });
+  }, 250);
+}
+
 /* ------------------------------------------------------------------ */
 /* getWindowData — для окна настроек                                   */
 /* ------------------------------------------------------------------ */
@@ -344,6 +473,30 @@ export default function () {
   ipcMain.on('topbar:close-overview', () => {
     try { closeOverview(); } catch (e) { console.error('[topbar:close-overview]', e?.message || e); }
   });
+  ipcMain.on('topbar:toggle-power-menu', (event) => {
+    if (event.sender !== global.topbarWindow?.webContents) return;
+    try {
+      if (powerMenuWindow && !powerMenuWindow.isDestroyed()) closePowerMenu();
+      else openPowerMenu();
+    } catch (error) {
+      console.error('[power-menu] failed to toggle menu:', error.message);
+    }
+  });
+  ipcMain.on('power-menu:close', (event) => {
+    if (event.sender !== powerMenuWindow?.webContents) return;
+    closePowerMenu();
+  });
+  ipcMain.handle('power-menu:execute', (event, { action } = {}) => {
+    if (event.sender !== powerMenuWindow?.webContents) {
+      return { ok: false, error: 'unauthorized' };
+    }
+    if (!['logout', 'shutdown', 'restart', 'sleep'].includes(action)) {
+      return { ok: false, error: 'invalid_power_action' };
+    }
+    closePowerMenu();
+    schedulePowerAction(action);
+    return { ok: true };
+  });
 
   /* --- Управление окнами --- */
   ipcMain.on('topbar:focus-window', (_e, { id }) => {
@@ -383,6 +536,9 @@ export default function () {
 
   ipcMain.handle('window-settings:get', (_e, { id }) => getWindowData(id));
 
+  ipcMain.handle('window-settings:set-z-order', (_e, { id, layer }) =>
+    setWindowZOrderById(id, layer));
+
   ipcMain.on('window-settings:set-opacity', async (_e, { id, opacity }) => {
     if (!id || typeof opacity !== 'number') return;
     try {
@@ -414,7 +570,7 @@ export default function () {
   });
 
   ipcMain.on('topbar:logout', () => {
-    app.quit();
+    openPowerMenu();
   });
 
   ipcMain.handle('topbar:get-window-bounds', (_e, { id }) => {

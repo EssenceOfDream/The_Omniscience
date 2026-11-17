@@ -981,6 +981,56 @@ export async function maximizeWindowById(id, _maximizedFromUi) {
   }
 }
 
+export async function setWindowZOrderById(id, layer) {
+  if (!['top', 'normal', 'bottom'].includes(layer)) {
+    return { ok: false, error: 'invalid_window_layer' };
+  }
+
+  const target = resolveTarget(id);
+  if (!target) return { ok: false, error: 'window_not_found' };
+
+  let hwnd = target.hwnd;
+  let electronWindow = null;
+  if (target.kind === 'our') {
+    electronWindow = getWindowById(target.appId);
+    if (!electronWindow || electronWindow.isDestroyed()) {
+      return { ok: false, error: 'window_not_found' };
+    }
+    hwnd = getWin32Hwnd(electronWindow);
+  }
+  if (!hwnd) return { ok: false, error: 'window_handle_unavailable' };
+  if (target.kind === 'native' && !win32Windows.some((window) => window.id === hwnd)) {
+    return { ok: false, error: 'window_not_found' };
+  }
+
+  const previousAlwaysOnTop = electronWindow?.isAlwaysOnTop() || false;
+  try {
+    if (electronWindow) electronWindow.setAlwaysOnTop(layer === 'top');
+    const updated = await requestWin32WindowAction(
+      'z-order',
+      { hwnd, layer },
+      { elevateOnFailure: true },
+    );
+    if (!updated) throw new Error('Windows rejected the requested window layer');
+    return { ok: true, layer };
+  } catch (error) {
+    if (electronWindow && !electronWindow.isDestroyed()) {
+      electronWindow.setAlwaysOnTop(previousAlwaysOnTop);
+    }
+    console.error('[nativeWindows:win32] failed to change window layer:', error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
+export async function suspendWindows() {
+  if (process.platform !== 'win32') {
+    throw new Error('Windows sleep is not available on this platform');
+  }
+  const suspended = await requestWin32('suspend', {}, 24 * 60 * 60 * 1000);
+  if (!suspended) throw new Error('Windows did not enter sleep mode');
+  return true;
+}
+
 /* ------------------------------------------------------------------ */
 /* Прозрачность (только для наших Electron-окон)                      */
 /* ------------------------------------------------------------------ */
@@ -1142,6 +1192,8 @@ export default async function () {
   ipcMain.handle('native-window:minimize', (_e, { id }) => minimizeWindowById(id));
   ipcMain.handle('native-window:maximize', (_e, { id, maximized }) =>
     maximizeWindowById(id, maximized));
+  ipcMain.handle('native-window:set-z-order', (_e, { id, layer }) =>
+    setWindowZOrderById(id, layer));
 
   ipcMain.handle('native-window:get-bounds', async (_e, { id }) => {
     try {

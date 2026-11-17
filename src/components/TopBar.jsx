@@ -71,6 +71,7 @@ export default function TopBar({
             <SettingsIcon sx={{ fontSize: 14 }} />
           </IconButton>
           <IconButton size="small" onClick={onRequestLogout}
+            aria-label="Меню питания"
             sx={{ color: '#fff', WebkitAppRegion: 'no-drag', width: 24, height: 24 }}>
             <PowerSettingsNewIcon sx={{ fontSize: 14 }} />
           </IconButton>

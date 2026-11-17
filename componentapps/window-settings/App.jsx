@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Box, Typography, Button, Stack, Divider, IconButton,
-  Slider, Chip,
+  Slider, Chip, ButtonGroup,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import BuildIcon from '@mui/icons-material/Build';
@@ -30,6 +30,8 @@ export default function App() {
   const [win, setWin] = useState(null);
   const [opacity, setOpacity] = useState(1.0);
   const [saving, setSaving] = useState(false);
+  const [layerBusy, setLayerBusy] = useState(false);
+  const [layerMessage, setLayerMessage] = useState('');
 
   const reload = useCallback(async () => {
     if (!windowId) return;
@@ -72,6 +74,28 @@ export default function App() {
     setSaving(true);
     fire('window-settings:set-opacity', { id: windowId, opacity: v });
     setTimeout(() => setSaving(false), 300);
+  };
+
+  const onSetLayer = async (layer) => {
+    setLayerBusy(true);
+    setLayerMessage('');
+    try {
+      const result = await api()?.invoke('window-settings:set-z-order', {
+        id: windowId,
+        layer,
+      });
+      setLayerMessage(result?.ok
+        ? ({
+          top: 'Окно закреплено поверх всех.',
+          normal: 'Окно возвращено в обычный слой.',
+          bottom: 'Окно перемещено позади остальных.',
+        }[layer])
+        : `Не удалось изменить слой окна: ${result?.error || 'нет ответа от системы'}`);
+    } catch (error) {
+      setLayerMessage(`Не удалось изменить слой окна: ${error.message}`);
+    } finally {
+      setLayerBusy(false);
+    }
   };
 
   const onOpenOverlay = () => {
@@ -164,6 +188,40 @@ export default function App() {
           {(opacity * 100).toFixed(0)}%
         </Typography>
       </Box>
+
+      {(isOur || isNative) && (
+        <>
+          <Divider sx={{ borderColor: 'rgba(255,255,255,0.1)', my: 1.5 }} />
+          <Typography sx={{
+            fontSize: 11, color: '#a855f7', mb: 0.75,
+            textTransform: 'uppercase', letterSpacing: 0.5,
+          }}>
+            Положение окна
+          </Typography>
+          <ButtonGroup
+            size="small"
+            fullWidth
+            disabled={layerBusy}
+            sx={{ mb: 0.75, '& .MuiButton-root': { textTransform: 'none', fontSize: 10 } }}
+          >
+            <Button onClick={() => onSetLayer('top')}>Поверх всех</Button>
+            <Button onClick={() => onSetLayer('normal')}>Обычно</Button>
+            <Button onClick={() => onSetLayer('bottom')}>Позади всех</Button>
+          </ButtonGroup>
+          {layerMessage && (
+            <Typography
+              role="status"
+              sx={{
+                fontSize: 10,
+                color: layerMessage.startsWith('Не удалось') ? '#f38ba8' : '#a6e3a1',
+                mb: 0.75,
+              }}
+            >
+              {layerMessage}
+            </Typography>
+          )}
+        </>
+      )}
 
       {/* --- Инструменты --- */}
       {(isOur || isOverlay || isNative) && (

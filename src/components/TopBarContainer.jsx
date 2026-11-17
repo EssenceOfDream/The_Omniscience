@@ -48,7 +48,7 @@ export default function TopBarContainer() {
         onCloseWindow={(w) => send('topbar:close-window', { id: w.id })}
         onRequestSearch={() => send('topbar:open-search')}
         onRequestSettings={() => send('topbar:open-settings')}
-        onRequestLogout={() => send('topbar:logout')}
+        onRequestLogout={() => send('topbar:toggle-power-menu')}
       />
     </Box>
   );
