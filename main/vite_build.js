@@ -1,6 +1,55 @@
 import { build } from 'vite';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
+
+function getBuildFingerprint(rootDir, inputDirs) {
+  const files = [
+    path.join(rootDir, 'main', 'vite_build.js'),
+    path.join(rootDir, 'package.json'),
+    path.join(rootDir, 'package-lock.json'),
+  ];
+
+  function collectFiles(dir) {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const filePath = path.join(dir, entry.name);
+      if (entry.isDirectory()) collectFiles(filePath);
+      else if (entry.isFile()) files.push(filePath);
+    }
+  }
+
+  for (const dir of inputDirs) collectFiles(dir);
+
+  const hash = crypto.createHash('sha256');
+  for (const filePath of files.sort()) {
+    const { size, mtimeMs } = fs.statSync(filePath);
+    hash.update(`${path.relative(rootDir, filePath)}\0${size}\0${mtimeMs}\n`);
+  }
+  return hash.digest('hex');
+}
+
+function collectOutputFiles(dir, rootDir = dir) {
+  const files = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const filePath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectOutputFiles(filePath, rootDir));
+    } else if (entry.isFile() && filePath !== path.join(rootDir, '.vite-build-cache.json')) {
+      files.push(path.relative(rootDir, filePath));
+    }
+  }
+  return files;
+}
+
+function isBuildCacheValid(cache, fingerprint, distDir) {
+  return cache?.fingerprint === fingerprint
+    && Array.isArray(cache.outputs)
+    && cache.outputs.length > 0
+    && cache.outputs.every((file) => typeof file === 'string'
+      && !path.isAbsolute(file)
+      && fs.existsSync(path.join(distDir, file)));
+}
 
 export default async function () {
   const rootDir = global.paths.projectRoot;
@@ -15,6 +64,7 @@ export default async function () {
     overview: path.join(rootDir, 'src', 'overview.html'),
   };
 
+  const componentInputs = [];
   if (fs.existsSync(componentappsDir)) {
     const entries = fs.readdirSync(componentappsDir, { withFileTypes: true });
     for (const entry of entries) {
@@ -57,6 +107,27 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       }
 
       input[`componentapps/${entry.name}/index.html`] = htmlPath;
+      componentInputs.push(appDir);
+    }
+  }
+
+  const fingerprint = getBuildFingerprint(rootDir, [
+    srcDir,
+    publicDir,
+    path.join(rootDir, 'themes'),
+    path.join(rootDir, 'webapps'),
+    ...componentInputs,
+  ]);
+  const cachePath = path.join(distDir, '.vite-build-cache.json');
+  if (fs.existsSync(cachePath)) {
+    try {
+      const cache = JSON.parse(fs.readFileSync(cachePath, 'utf-8'));
+      if (isBuildCacheValid(cache, fingerprint, distDir)) {
+        console.log('[vite] Build is up to date; reusing dist.');
+        return;
+      }
+    } catch (error) {
+      console.warn('[vite] Build cache is unreadable; rebuilding.', error);
     }
   }
 
@@ -75,6 +146,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       outDir: distDir,
       emptyOutDir: true,
       sourcemap: true,
+      chunkSizeWarningLimit: Infinity,
       rollupOptions: { input },
     },
     publicDir: path.join(rootDir, 'public'),
@@ -91,4 +163,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       },
     ],
   });
+
+  fs.writeFileSync(cachePath, JSON.stringify({
+    fingerprint,
+    outputs: collectOutputFiles(distDir),
+  }));
 }

@@ -43,7 +43,6 @@ export default async function () {
   await global.$.texts_load();
   await global.$.extensions_setup();
   await global.$.preloads_generate();
-  //await global.$.adblock_init();
   await global.$.TopBar_create();
   await global.$.mainWindow_create();
   await global.$.ipc_setup();
