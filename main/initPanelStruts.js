@@ -4,7 +4,9 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import {
   hideWindowsDesktopIcons, hideWindowsDesktopWallpaper, hideWindowsTaskbar, removeWindowsDock,
-  resetWindowsDock, restoreWindowsDesktopIcons, restoreWindowsDesktopWallpaper,
+  resetWindowsDock,
+  startWindowsPanelGuard, stopWindowsPanelGuard,
+  restoreWindowsDesktopIcons, restoreWindowsDesktopWallpaper,
   restoreWindowsTaskbar, updateWindowsDock,
 } from './ipc_nativeWindows.js';
 
@@ -13,6 +15,8 @@ const execFileAsync = promisify(execFile);
 let applied = false;
 let applyTimer = null;
 let windowsDockReady = false;
+let edgeStrutsUpdatePromise = null;
+let lastEdgeStrutsBounds = null;
 
 function get1pxStrutBounds(edge) {
   const display = screen.getPrimaryDisplay();
@@ -29,7 +33,9 @@ function get1pxStrutBounds(edge) {
 async function createOrUpdateEdgeStrut(edge) {
   if (process.platform !== 'win32') return false;
   let win = global.__omniEdgeStruts?.[edge];
-  if (!win || win.isDestroyed()) {
+  const isNewWindow = !win || win.isDestroyed();
+  let readyToShow;
+  if (isNewWindow) {
     const bounds = get1pxStrutBounds(edge);
     win = new BrowserWindow({
       ...bounds,
@@ -53,26 +59,58 @@ async function createOrUpdateEdgeStrut(edge) {
       },
     });
     win._omniAppBarEdge = edge;
-    win.loadURL('about:blank');
-    win.once('ready-to-show', () => {
-      if (!win.isDestroyed()) win.show();
+    readyToShow = new Promise((resolve) => {
+      win.once('ready-to-show', resolve);
+      win.once('closed', resolve);
     });
+    win.loadURL('about:blank');
     if (!global.__omniEdgeStruts) global.__omniEdgeStruts = {};
     global.__omniEdgeStruts[edge] = win;
   } else {
-    try { win.setBounds(get1pxStrutBounds(edge)); } catch { /* ignore */ }
+    win.setBounds(get1pxStrutBounds(edge));
   }
-  await resetWindowsDock(win);
+
+  if (isNewWindow) {
+    await readyToShow;
+    if (win.isDestroyed()) return false;
+    win.show();
+    const initialized = await resetWindowsDock(win);
+    if (!initialized) {
+      console.error(`[panelStruts] failed to initialize ${edge} work-area strut`);
+      return false;
+    }
+  }
+
   return updateWindowsDock(win);
 }
 
 async function updateEdgeStruts() {
   if (process.platform !== 'win32') return;
-  await Promise.all([
+  while (edgeStrutsUpdatePromise) {
+    await edgeStrutsUpdatePromise;
+  }
+
+  const { x, y, width, height } = screen.getPrimaryDisplay().bounds;
+  const boundsKey = `${x},${y},${width},${height}`;
+  if (boundsKey === lastEdgeStrutsBounds) return;
+
+  const update = Promise.all([
     createOrUpdateEdgeStrut('left'),
     createOrUpdateEdgeStrut('right'),
     createOrUpdateEdgeStrut('bottom'),
-  ]);
+  ]).then((registered) => {
+    if (registered.every(Boolean)) {
+      lastEdgeStrutsBounds = boundsKey;
+    } else {
+      console.error('[panelStruts] one or more edge work-area struts could not be registered');
+    }
+  });
+  edgeStrutsUpdatePromise = update;
+  try {
+    await update;
+  } finally {
+    if (edgeStrutsUpdatePromise === update) edgeStrutsUpdatePromise = null;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -288,6 +326,13 @@ export default function ({ show = true } = {}) {
           //await hideWindowsDesktopIcons();
           await hideWindowsDesktopWallpaper();
           await updateEdgeStruts();
+          await startWindowsPanelGuard([
+            global.topbarWindow,
+            global.mainWindow,
+            ...Object.values(global.__omniEdgeStruts || {}),
+          ]).catch((error) => {
+            console.error('[panelStruts] failed to start all-window guard:', error.message);
+          });
         } catch (error) {
           console.error('[panelStruts] failed to prepare Explorer shell UI:', error.message);
           await Promise.all([
@@ -315,6 +360,9 @@ export default function ({ show = true } = {}) {
   tb.on('close', () => {
     if (process.platform === 'win32') {
       windowsDockReady = false;
+      stopWindowsPanelGuard().catch((error) => {
+        console.error('[panelStruts] failed to stop window guard:', error.message);
+      });
       Promise.all([
         restoreWindowsTaskbar(),
         restoreWindowsDesktopIcons(),
@@ -335,9 +383,8 @@ export default function ({ show = true } = {}) {
 
   if (process.platform === 'win32') {
     const handleMetricsChanged = (_event, _display, changedMetrics) => {
-      if (!changedMetrics.some((metric) =>
-        metric === 'bounds' || metric === 'workArea'
-      )) return;
+      // AppBar registration changes workArea; reacting to that would re-register the same struts.
+      if (!changedMetrics.includes('bounds')) return;
       updateEdgeStruts().catch((error) => {
         console.error('[panelStruts] failed to update edge docks:', error.message);
       });

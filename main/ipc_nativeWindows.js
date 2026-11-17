@@ -260,6 +260,17 @@ export async function updateWindowsDock(win) {
   });
 }
 
+export async function startWindowsPanelGuard(panelWindows = []) {
+  if (process.platform !== 'win32') return false;
+  const excludedWindows = panelWindows.map(getWin32Hwnd).filter(Boolean);
+  return requestWin32('panel-window-guard-start', { excludedWindows });
+}
+
+export async function stopWindowsPanelGuard() {
+  if (process.platform !== 'win32') return false;
+  return requestWin32('panel-window-guard-stop');
+}
+
 export async function removeWindowsDock(win) {
   if (!win) return false;
   win32DockInitialized.delete(win);

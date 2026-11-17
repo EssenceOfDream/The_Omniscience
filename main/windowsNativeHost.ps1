@@ -521,6 +521,10 @@ while ($null -ne ($line = $reader.ReadLine())) {
                     [long]$request.hwnd, [int]$request.x, [int]$request.y,
                     [int]$request.width, [int]$request.height, [string]$request.edge)
             }
+            'panel-window-guard-start' {
+                [OmniWin32]::StartPanelWindowGuard([long[]]$request.excludedWindows)
+            }
+            'panel-window-guard-stop' { [OmniWin32]::StopPanelWindowGuard() }
             'dock-reset'  { [OmniWin32]::ResetDock([long]$request.hwnd) }
             'dock-remove' { [OmniWin32]::RemoveDock([long]$request.hwnd) }
             'cursor' { [OmniWin32]::SetCursor([int]$request.x, [int]$request.y) }

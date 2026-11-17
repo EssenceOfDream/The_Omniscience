@@ -25,6 +25,8 @@ public sealed class OmniWindowInfo
 public static class OmniWin32
 {
     private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+    private delegate void WinEventProc(IntPtr hook, uint eventType, IntPtr hwnd,
+        int idObject, int idChild, uint eventThread, uint eventTime);
     private const int GWL_STYLE = -16;
     private const int GWL_HWNDPARENT = -8;
     private const int WS_CHILD = 0x40000000;
@@ -40,6 +42,16 @@ public static class OmniWin32
     private const uint MONITOR_DEFAULTTONEAREST = 2;
     private const int SW_HIDE = 0;
     private const int SW_SHOWNOACTIVATE = 4;
+    private const int SW_RESTORE = 9;
+    private const uint EVENT_SYSTEM_MOVESIZEEND = 0x000B;
+    private const uint EVENT_OBJECT_LOCATIONCHANGE = 0x800B;
+    private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
+    private const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
+    private const int OBJID_WINDOW = 0;
+    private const int CHILDID_SELF = 0;
+    private const int VK_LBUTTON = 0x01;
+    private const uint WM_QUIT = 0x0012;
+    private const uint PM_NOREMOVE = 0x0000;
     private const uint ABM_NEW = 0x00000000;
     private const uint ABM_REMOVE = 0x00000001;
     private const uint ABM_QUERYPOS = 0x00000002;
@@ -62,6 +74,13 @@ public static class OmniWin32
     private static readonly HashSet<IntPtr> AppBars = new HashSet<IntPtr>();
     private static readonly Dictionary<IntPtr, RECT> AppBarRectangles = new Dictionary<IntPtr, RECT>();
     private static readonly Dictionary<IntPtr, uint> AppBarEdges = new Dictionary<IntPtr, uint>();
+    private static readonly object AppBarSync = new object();
+    private static readonly object PanelWindowGuardSync = new object();
+    private static readonly HashSet<IntPtr> WindowsBeingConstrained = new HashSet<IntPtr>();
+    private static readonly HashSet<IntPtr> PanelWindowGuardExcludedWindows = new HashSet<IntPtr>();
+    private static readonly HashSet<IntPtr> DesktopWindows = new HashSet<IntPtr>();
+    private static readonly WinEventProc PanelWindowEventCallback = OnPanelWindowEvent;
+    private static readonly EnumWindowsProc PanelWindowEnumerator = EnumerateWindowForPanelGuard;
     private static readonly EnumWindowsProc WindowEnumerator = EnumerateWindow;
     private static readonly Dictionary<IntPtr, Thread> ActiveDrags = new Dictionary<IntPtr, Thread>();
     private static readonly Dictionary<IntPtr, bool> ExplorerTaskbarVisibility = new Dictionary<IntPtr, bool>();
@@ -76,12 +95,29 @@ public static class OmniWin32
     private static RECT OriginalWorkArea;
     private static bool HasOriginalWorkArea;
     private static bool WorkAreaReserved;
+    private static Thread PanelWindowGuardThread;
+    private static uint PanelWindowGuardThreadId;
+    private static IntPtr PanelWindowLocationHook;
+    private static IntPtr PanelWindowMoveSizeHook;
+    private static readonly ManualResetEvent PanelWindowGuardReady = new ManualResetEvent(false);
+    private static string PanelWindowGuardStartError;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X; public int Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MSG {
+        public IntPtr hwnd;
+        public uint message;
+        public UIntPtr wParam;
+        public IntPtr lParam;
+        public uint time;
+        public POINT pt;
+        public uint lPrivate;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct MONITORINFO {
@@ -111,6 +147,21 @@ public static class OmniWin32
 
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr module,
+        WinEventProc callback, uint processId, uint threadId, uint flags);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool UnhookWinEvent(IntPtr hook);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int GetMessage(out MSG message, IntPtr window, uint minFilter, uint maxFilter);
+    [DllImport("user32.dll")]
+    private static extern bool PeekMessage(out MSG message, IntPtr window, uint minFilter, uint maxFilter, uint remove);
+    [DllImport("user32.dll")]
+    private static extern bool TranslateMessage(ref MSG message);
+    [DllImport("user32.dll")]
+    private static extern IntPtr DispatchMessage(ref MSG message);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool PostThreadMessage(uint threadId, uint message, UIntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int maxCount);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -143,6 +194,8 @@ public static class OmniWin32
     private static extern IntPtr GetParent(IntPtr child);
     [DllImport("user32.dll")]
     private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr MonitorFromRect(ref RECT rect, uint flags);
     [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -729,6 +782,188 @@ public static class OmniWin32
         return true;
     }
 
+    public static bool StartPanelWindowGuard(long[] excludedWindows)
+    {
+        lock (PanelWindowGuardSync) {
+            if (PanelWindowGuardThread != null && PanelWindowGuardThread.IsAlive
+                && PanelWindowLocationHook != IntPtr.Zero
+                && PanelWindowMoveSizeHook != IntPtr.Zero) return true;
+            PanelWindowGuardExcludedWindows.Clear();
+            if (excludedWindows != null) {
+                foreach (long hwnd in excludedWindows)
+                    if (hwnd != 0) PanelWindowGuardExcludedWindows.Add(new IntPtr(hwnd));
+            }
+            PanelWindowGuardStartError = null;
+            PanelWindowGuardReady.Reset();
+            PanelWindowGuardThread = new Thread(PanelWindowGuardMessageLoop) {
+                IsBackground = true,
+                Name = "Omniscience panel window guard"
+            };
+            PanelWindowGuardThread.Start();
+            if (!PanelWindowGuardReady.WaitOne(5000))
+                throw new TimeoutException("Timed out while starting the panel window guard");
+            if (PanelWindowGuardStartError != null)
+                throw new InvalidOperationException(PanelWindowGuardStartError);
+            EnumWindows(PanelWindowEnumerator, IntPtr.Zero);
+            return true;
+        }
+    }
+
+    public static bool StopPanelWindowGuard()
+    {
+        Thread guardThread;
+        lock (PanelWindowGuardSync) {
+            guardThread = PanelWindowGuardThread;
+            if (guardThread == null || !guardThread.IsAlive) return true;
+            if (!PostThreadMessage(PanelWindowGuardThreadId, WM_QUIT, UIntPtr.Zero, IntPtr.Zero))
+                throw new InvalidOperationException("Could not stop the panel window guard: "
+                    + Marshal.GetLastWin32Error());
+        }
+        if (!guardThread.Join(5000))
+            throw new TimeoutException("Timed out while stopping the panel window guard");
+        lock (PanelWindowGuardSync) {
+            if (PanelWindowGuardThread == guardThread) PanelWindowGuardThread = null;
+        }
+        return true;
+    }
+
+    private static void PanelWindowGuardMessageLoop()
+    {
+        SetThreadDpiAwarenessContext(new IntPtr(-3));
+        MSG message;
+        PeekMessage(out message, IntPtr.Zero, 0, 0, PM_NOREMOVE);
+        PanelWindowGuardThreadId = GetCurrentThreadId();
+        PanelWindowLocationHook = SetWinEventHook(
+            EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, IntPtr.Zero,
+            PanelWindowEventCallback, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        PanelWindowMoveSizeHook = SetWinEventHook(
+            EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MOVESIZEEND, IntPtr.Zero,
+            PanelWindowEventCallback, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        if (PanelWindowLocationHook == IntPtr.Zero || PanelWindowMoveSizeHook == IntPtr.Zero) {
+            PanelWindowGuardStartError = "SetWinEventHook failed: " + Marshal.GetLastWin32Error();
+            if (PanelWindowLocationHook != IntPtr.Zero) UnhookWinEvent(PanelWindowLocationHook);
+            if (PanelWindowMoveSizeHook != IntPtr.Zero) UnhookWinEvent(PanelWindowMoveSizeHook);
+            PanelWindowLocationHook = IntPtr.Zero;
+            PanelWindowMoveSizeHook = IntPtr.Zero;
+            PanelWindowGuardReady.Set();
+            return;
+        }
+        PanelWindowGuardReady.Set();
+        while (GetMessage(out message, IntPtr.Zero, 0, 0) > 0) {
+            TranslateMessage(ref message);
+            DispatchMessage(ref message);
+        }
+        UnhookWinEvent(PanelWindowLocationHook);
+        UnhookWinEvent(PanelWindowMoveSizeHook);
+        PanelWindowLocationHook = IntPtr.Zero;
+        PanelWindowMoveSizeHook = IntPtr.Zero;
+        PanelWindowGuardThreadId = 0;
+    }
+
+    private static void OnPanelWindowEvent(IntPtr hook, uint eventType, IntPtr window,
+        int idObject, int idChild, uint eventThread, uint eventTime)
+    {
+        if (window == IntPtr.Zero || idObject != OBJID_WINDOW || idChild != CHILDID_SELF) return;
+        if (eventType == EVENT_OBJECT_LOCATIONCHANGE
+            && (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0) return;
+        try {
+            ConstrainWindowToPanelArea(window);
+        } catch (Exception error) {
+            Trace.WriteLine("Panel window guard failed: " + error);
+        }
+    }
+
+    private static bool EnumerateWindowForPanelGuard(IntPtr window, IntPtr unused)
+    {
+        try {
+            ConstrainWindowToPanelArea(window);
+        } catch (Exception error) {
+            Trace.WriteLine("Could not constrain an existing window to the panel area: " + error);
+        }
+        return true;
+    }
+
+    private static void ConstrainWindowToPanelArea(IntPtr window)
+    {
+        if (!IsWindow(window) || !IsWindowVisible(window) || IsIconic(window)) return;
+        lock (AppBarSync) {
+            if (AppBarRectangles.ContainsKey(window)) return;
+        }
+        if (IsPanelGuardExempt(window)) return;
+        var className = new StringBuilder(256);
+        if (GetClassName(window, className, className.Capacity) > 0) {
+            string value = className.ToString();
+            if (value == "Progman" || value == "WorkerW"
+                || value == "Shell_TrayWnd" || value == "Shell_SecondaryTrayWnd") return;
+        }
+        lock (WindowsBeingConstrained) {
+            if (!WindowsBeingConstrained.Add(window)) return;
+        }
+        try {
+            IntPtr monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+            if (monitor == IntPtr.Zero) return;
+            MONITORINFO info = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
+            if (!GetMonitorInfo(monitor, ref info)) return;
+
+            RECT area = GetPanelConstrainedArea(info);
+            if (area.Right <= area.Left || area.Bottom <= area.Top) return;
+
+            if (IsZoomed(window)) ShowWindow(window, SW_RESTORE);
+            RECT bounds;
+            if (!GetWindowRect(window, out bounds)) return;
+            RECT constrained = ClampWindowRectToArea(bounds, area);
+            if (constrained.Left == bounds.Left && constrained.Top == bounds.Top
+                && constrained.Right == bounds.Right && constrained.Bottom == bounds.Bottom) return;
+
+            if (!SetWindowPos(window, IntPtr.Zero, constrained.Left, constrained.Top,
+                constrained.Right - constrained.Left, constrained.Bottom - constrained.Top, 0x0010 | 0x0200)) {
+                Trace.WriteLine("Could not keep window " + window.ToInt64()
+                    + " outside the panel area: " + Marshal.GetLastWin32Error());
+            }
+        } finally {
+            lock (WindowsBeingConstrained) WindowsBeingConstrained.Remove(window);
+        }
+    }
+
+    private static bool IsPanelGuardExempt(IntPtr window)
+    {
+        lock (PanelWindowGuardSync) {
+            return PanelWindowGuardExcludedWindows.Contains(window)
+                || DesktopWindows.Contains(window);
+        }
+    }
+
+    private static RECT GetPanelConstrainedArea(MONITORINFO info)
+    {
+        RECT area = info.rcWork;
+        lock (AppBarSync) {
+            foreach (var panel in AppBarRectangles) {
+                RECT bounds = panel.Value;
+                if (bounds.Right <= info.rcMonitor.Left || bounds.Left >= info.rcMonitor.Right
+                    || bounds.Bottom <= info.rcMonitor.Top || bounds.Top >= info.rcMonitor.Bottom) continue;
+                uint edge = AppBarEdges.ContainsKey(panel.Key) ? AppBarEdges[panel.Key] : ABE_TOP;
+                if (edge == ABE_TOP && bounds.Top <= info.rcMonitor.Top + 2)
+                    area.Top = Math.Max(area.Top, bounds.Bottom);
+                else if (edge == ABE_BOTTOM && bounds.Bottom >= info.rcMonitor.Bottom - 2)
+                    area.Bottom = Math.Min(area.Bottom, bounds.Top);
+                else if (edge == ABE_LEFT && bounds.Left <= info.rcMonitor.Left + 2)
+                    area.Left = Math.Max(area.Left, bounds.Right);
+                else if (edge == ABE_RIGHT && bounds.Right >= info.rcMonitor.Right - 2)
+                    area.Right = Math.Min(area.Right, bounds.Left);
+            }
+        }
+        return area;
+    }
+
+    private static RECT ClampWindowRectToArea(RECT bounds, RECT area)
+    {
+        int width = Math.Min(Math.Max(1, bounds.Right - bounds.Left), area.Right - area.Left);
+        int height = Math.Min(Math.Max(1, bounds.Bottom - bounds.Top), area.Bottom - area.Top);
+        int x = Math.Max(area.Left, Math.Min(bounds.Left, area.Right - width));
+        int y = Math.Max(area.Top, Math.Min(bounds.Top, area.Bottom - height));
+        return new RECT { Left = x, Top = y, Right = x + width, Bottom = y + height };
+    }
+
     private static bool PositionFallbackDock(IntPtr window, RECT requested, RECT monitorBounds, int width, int height)
     {
         if (!ReserveWorkArea(requested, monitorBounds)) return false;
@@ -824,10 +1059,48 @@ public static class OmniWin32
         return ShowExplorerShellUi();
     }
 
+    private static bool GetWorkAreaForBounds(RECT bounds, out RECT workArea)
+    {
+        IntPtr monitor = MonitorFromRect(ref bounds, MONITOR_DEFAULTTONEAREST);
+        if (monitor == IntPtr.Zero) {
+            workArea = new RECT();
+            return false;
+        }
+        MONITORINFO info = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
+        if (!GetMonitorInfo(monitor, ref info)) {
+            workArea = new RECT();
+            return false;
+        }
+        workArea = info.rcWork;
+        return workArea.Right > workArea.Left && workArea.Bottom > workArea.Top;
+    }
+
+    private static RECT ClampToWorkArea(int x, int y, int width, int height)
+    {
+        RECT workArea;
+        RECT requested = new RECT {
+            Left = x,
+            Top = y,
+            Right = x + Math.Max(1, width),
+            Bottom = y + Math.Max(1, height)
+        };
+        if (!GetWorkAreaForBounds(requested, out workArea)) {
+            throw new InvalidOperationException("Could not read the window's work area");
+        }
+        width = Math.Max(1, Math.Min(width, workArea.Right - workArea.Left));
+        height = Math.Max(1, Math.Min(height, workArea.Bottom - workArea.Top));
+        x = Math.Max(workArea.Left, Math.Min(x, workArea.Right - width));
+        y = Math.Max(workArea.Top, Math.Min(y, workArea.Bottom - height));
+        return new RECT { Left = x, Top = y, Right = x + width, Bottom = y + height };
+    }
+
     public static bool SetBounds(long hwnd, int x, int y, int width, int height)
     {
-        bool updated = SetWindowPos(new IntPtr(hwnd), IntPtr.Zero, x, y,
-            Math.Max(1, width), Math.Max(1, height), 0x0014);
+        IntPtr window = new IntPtr(hwnd);
+        if (!IsWindow(window)) return false;
+        RECT bounds = ClampToWorkArea(x, y, width, height);
+        bool updated = SetWindowPos(window, IntPtr.Zero, bounds.Left, bounds.Top,
+            bounds.Right - bounds.Left, bounds.Bottom - bounds.Top, 0x0014);
         if (!updated && Marshal.GetLastWin32Error() == 5) throw new UnauthorizedAccessException("access_denied");
         return updated;
     }
@@ -836,16 +1109,31 @@ public static class OmniWin32
     {
         IntPtr window = new IntPtr(hwnd);
         if (!IsWindow(window)) return false;
-        const uint flags = 0x0213;
-        if (!SetWindowPos(window, new IntPtr(-2), 0, 0, 0, 0, flags)) {
+        lock (PanelWindowGuardSync) DesktopWindows.Add(window);
+        IntPtr monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
+        if (monitor == IntPtr.Zero)
+            throw new InvalidOperationException("Could not locate the desktop window's monitor");
+        MONITORINFO info = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
+        if (!GetMonitorInfo(monitor, ref info))
+            throw new InvalidOperationException("GetMonitorInfo failed: " + Marshal.GetLastWin32Error());
+
+        RECT bounds = info.rcMonitor;
+        if (!SetWindowPos(window, new IntPtr(-2), bounds.Left, bounds.Top,
+            bounds.Right - bounds.Left, bounds.Bottom - bounds.Top, SWP_NOACTIVATE)) {
             int error = Marshal.GetLastWin32Error();
             if (error == 5) throw new UnauthorizedAccessException("access_denied");
             throw new InvalidOperationException("SetWindowPos(HWND_NOTOPMOST) failed: " + error);
         }
-        if (!SetWindowPos(window, new IntPtr(1), 0, 0, 0, 0, flags)) {
+        if (!SetWindowPos(window, new IntPtr(1), 0, 0, 0, 0, 0x0213)) {
             int error = Marshal.GetLastWin32Error();
             if (error == 5) throw new UnauthorizedAccessException("access_denied");
             throw new InvalidOperationException("SetWindowPos(HWND_BOTTOM) failed: " + error);
+        }
+        RECT actual;
+        if (!GetWindowRect(window, out actual)
+            || actual.Left != bounds.Left || actual.Top != bounds.Top
+            || actual.Right != bounds.Right || actual.Bottom != bounds.Bottom) {
+            throw new InvalidOperationException("Desktop window did not cover its monitor after repositioning");
         }
         return true;
     }
@@ -945,8 +1233,8 @@ public static class OmniWin32
         MONITORINFO monitorInfo = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
         if (!GetMonitorInfo(monitor, ref monitorInfo))
             throw new InvalidOperationException("GetMonitorInfo failed: " + Marshal.GetLastWin32Error());
-        if (!CaptureOriginalWorkArea()) throw new InvalidOperationException("Could not capture the original Windows work area");
         RECT monitorBounds = monitorInfo.rcMonitor;
+        if (!CaptureOriginalWorkArea()) throw new InvalidOperationException("Could not capture the original Windows work area");
         int requestedHeight = Math.Max(1, height);
         RECT requested = new RECT { Left = x, Top = y, Right = x + Math.Max(1, width), Bottom = y + requestedHeight };
         uint edge = edgeName == "left" ? ABE_LEFT
@@ -954,31 +1242,36 @@ public static class OmniWin32
             : edgeName == "bottom" ? ABE_BOTTOM
             : ABE_TOP;
         APPBARDATA data = NewAppBarData(window, requested, edge);
+        lock (AppBarSync) {
+            AppBarRectangles[window] = requested;
+            AppBarEdges[window] = edge;
+        }
         if (!AppBars.Contains(window)) {
             if (SHAppBarMessage(ABM_NEW, ref data) == UIntPtr.Zero)
                 return PositionFallbackDock(window, requested, monitorBounds, width, requestedHeight);
             AppBars.Add(window);
         }
-        AppBarRectangles[window] = requested;
-        AppBarEdges[window] = edge;
         data = NewAppBarData(window, requested, edge);
         if (SHAppBarMessage(ABM_QUERYPOS, ref data) == UIntPtr.Zero) {
             RemoveDock(hwnd);
             return PositionFallbackDock(window, requested, monitorBounds, width, requestedHeight);
         }
-        data.rc = requested;
+        RECT positionedBounds = data.rc;
+        lock (AppBarSync) AppBarRectangles[window] = positionedBounds;
         if (SHAppBarMessage(ABM_SETPOS, ref data) == UIntPtr.Zero) {
             RemoveDock(hwnd);
             return PositionFallbackDock(window, requested, monitorBounds, width, requestedHeight);
         }
-        bool workAreaReserved = ReserveWorkArea(requested, monitorBounds);
-        bool positioned = SetWindowPos(window, new IntPtr(-1), requested.Left, requested.Top,
-            width, requestedHeight, SWP_NOACTIVATE);
+        int positionedWidth = positionedBounds.Right - positionedBounds.Left;
+        int positionedHeight = positionedBounds.Bottom - positionedBounds.Top;
+        bool workAreaReserved = ReserveWorkArea(positionedBounds, monitorBounds);
+        bool positioned = SetWindowPos(window, new IntPtr(-1), positionedBounds.Left, positionedBounds.Top,
+            positionedWidth, positionedHeight, SWP_NOACTIVATE);
         RECT actual = new RECT();
         bool atRequestedBounds = GetWindowRect(window, out actual)
-            && actual.Left == requested.Left && actual.Top == requested.Top
-            && actual.Right - actual.Left == width && actual.Bottom - actual.Top == requestedHeight;
-        if (positioned && atRequestedBounds && workAreaReserved && IsWorkAreaReserved(requested, monitorBounds))
+            && actual.Left == positionedBounds.Left && actual.Top == positionedBounds.Top
+            && actual.Right - actual.Left == positionedWidth && actual.Bottom - actual.Top == positionedHeight;
+        if (positioned && atRequestedBounds && workAreaReserved && IsWorkAreaReserved(positionedBounds, monitorBounds))
             return true;
         RemoveDock(hwnd);
         return PositionFallbackDock(window, requested, monitorBounds, width, requestedHeight);
@@ -992,8 +1285,10 @@ public static class OmniWin32
         APPBARDATA data = NewAppBarData(window, new RECT());
         UIntPtr removed = SHAppBarMessage(ABM_REMOVE, ref data);
         AppBars.Remove(window);
-        AppBarRectangles.Remove(window);
-        AppBarEdges.Remove(window);
+        lock (AppBarSync) {
+            AppBarRectangles.Remove(window);
+            AppBarEdges.Remove(window);
+        }
         bool restored = AppBars.Count == 0
             ? RestoreWorkArea()
             : ReapplyAppBarWorkArea();
@@ -1004,8 +1299,10 @@ public static class OmniWin32
     {
         IntPtr window = new IntPtr(hwnd);
         bool wasRegistered = AppBars.Remove(window);
-        AppBarRectangles.Remove(window);
-        AppBarEdges.Remove(window);
+        lock (AppBarSync) {
+            AppBarRectangles.Remove(window);
+            AppBarEdges.Remove(window);
+        }
         bool removed = true;
         if (wasRegistered) {
             APPBARDATA data = NewAppBarData(window, new RECT());
@@ -1025,8 +1322,10 @@ public static class OmniWin32
             if (SHAppBarMessage(ABM_REMOVE, ref data) == UIntPtr.Zero) removed = false;
         }
         AppBars.Clear();
-        AppBarRectangles.Clear();
-        AppBarEdges.Clear();
+        lock (AppBarSync) {
+            AppBarRectangles.Clear();
+            AppBarEdges.Clear();
+        }
         bool restored = RestoreWorkArea();
         return removed && restored;
     }
@@ -1126,6 +1425,16 @@ public static class OmniWin32
                             }
                             if (resizeDirection.IndexOf('e') >= 0)
                                 nextWidth = Math.Max(minWidth, initialWidth + dx);
+                        }
+                        try {
+                            RECT constrained = ClampToWorkArea(nextX, nextY, nextWidth, nextHeight);
+                            nextX = constrained.Left;
+                            nextY = constrained.Top;
+                            nextWidth = constrained.Right - constrained.Left;
+                            nextHeight = constrained.Bottom - constrained.Top;
+                        } catch (InvalidOperationException ex) {
+                            Trace.WriteLine(ex);
+                            break;
                         }
                         if (nextX != lastX || nextY != lastY || nextWidth != lastWidth || nextHeight != lastHeight) {
                             if (SetWindowPos(window, IntPtr.Zero, nextX, nextY, nextWidth, nextHeight, 0x0014)) {

@@ -3,6 +3,7 @@ const { BrowserWindow, ipcMain, screen, webContents } = electronPkg;
 import { pathToFileURL } from 'url';
 import path from 'path';
 import { attachToWebContents } from './ipc_browserContextMenu.js';
+import { clampBoundsToWorkArea } from './windowBounds.js';
 
 /* ------------------------------------------------------------------ */
 /* Реестр окон                                                         */
@@ -34,6 +35,28 @@ function getShellSession() {
     return global.mainWindow.webContents.session;
   }
   return null;
+}
+
+function constrainWindowBounds(bounds) {
+  const primary = screen.getPrimaryDisplay();
+  const requested = {
+    x: Number.isFinite(bounds?.x) ? Math.round(bounds.x) : primary.workArea.x,
+    y: Number.isFinite(bounds?.y) ? Math.round(bounds.y) : primary.workArea.y,
+    width: Number.isFinite(bounds?.width) ? Math.max(1, Math.round(bounds.width)) : 900,
+    height: Number.isFinite(bounds?.height) ? Math.max(1, Math.round(bounds.height)) : 600,
+  };
+  const display = screen.getDisplayMatching(requested);
+  return clampBoundsToWorkArea(requested, display.workArea);
+}
+
+function keepWindowInsideWorkArea(win) {
+  if (win.isDestroyed() || win.isMaximized() || win.isFullScreen()) return;
+  const bounds = win.getBounds();
+  const constrained = constrainWindowBounds(bounds);
+  if (bounds.x !== constrained.x || bounds.y !== constrained.y
+    || bounds.width !== constrained.width || bounds.height !== constrained.height) {
+    win.setBounds(constrained);
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -151,8 +174,14 @@ function attachWindowEvents(id, win) {
   win.on('unmaximize', () => { sendState(); emit('unmaximize'); });
   win.on('enter-full-screen', sendState);
   win.on('leave-full-screen', sendState);
-  win.on('move', () => emit('moved', { bounds: win.getBounds() }));
-  win.on('resize', () => emit('resized', { bounds: win.getBounds() }));
+  win.on('move', () => {
+    keepWindowInsideWorkArea(win);
+    emit('moved', { bounds: win.getBounds() });
+  });
+  win.on('resize', () => {
+    keepWindowInsideWorkArea(win);
+    emit('resized', { bounds: win.getBounds() });
+  });
 
   win.webContents.on('page-title-updated', (_e, title) => {
     emit('title-changed', { title });
@@ -188,17 +217,15 @@ export function createWindowByRequest({
     return existing.win;
   }
 
-  const display = screen.getPrimaryDisplay();
-  const workArea = display.workAreaSize;
-
-  const b = bounds && bounds.width && bounds.height
+  const workArea = screen.getPrimaryDisplay().workArea;
+  const b = constrainWindowBounds(bounds && bounds.width && bounds.height
     ? bounds
     : {
-      x: Math.round((workArea.width - 900) / 2),
-      y: Math.round((workArea.height - 600) / 2),
-      width: 900,
-      height: 600,
-    };
+      x: Math.round(workArea.x + (workArea.width - 900) / 2),
+      y: Math.round(workArea.y + (workArea.height - 600) / 2),
+      width: Math.min(900, workArea.width),
+      height: Math.min(600, workArea.height),
+    });
 
   const session = getShellSession();
   const finalUrl = buildFinalUrl(url, { id, desktopId, extra });
@@ -349,12 +376,7 @@ export default function () {
   ipcMain.on('window:set-bounds', (_e, { id, bounds }) => {
     const win = windows.get(id)?.win;
     if (!win || !bounds) return;
-    win.setBounds({
-      x: Math.round(bounds.x),
-      y: Math.round(bounds.y),
-      width: Math.round(bounds.width),
-      height: Math.round(bounds.height),
-    });
+    win.setBounds(constrainWindowBounds(bounds));
   });
 
   ipcMain.handle('window:list', () => listWindows());
