@@ -47,6 +47,9 @@ public static class OmniWin32
     private const uint ABM_GETSTATE = 0x00000004;
     private const uint ABM_SETSTATE = 0x0000000A;
     private const uint ABE_TOP = 1;
+    private const uint ABE_LEFT = 0;
+    private const uint ABE_RIGHT = 2;
+    private const uint ABE_BOTTOM = 3;
     private const uint ABS_AUTOHIDE = 0x00000001;
     private const uint SPI_SETWORKAREA = 0x002F;
     private const uint SPI_GETWORKAREA = 0x0030;
@@ -57,6 +60,8 @@ public static class OmniWin32
     private const uint SWP_NOACTIVATE = 0x0010;
     private const int WM_APP = 0x8000;
     private static readonly HashSet<IntPtr> AppBars = new HashSet<IntPtr>();
+    private static readonly Dictionary<IntPtr, RECT> AppBarRectangles = new Dictionary<IntPtr, RECT>();
+    private static readonly Dictionary<IntPtr, uint> AppBarEdges = new Dictionary<IntPtr, uint>();
     private static readonly EnumWindowsProc WindowEnumerator = EnumerateWindow;
     private static readonly Dictionary<IntPtr, Thread> ActiveDrags = new Dictionary<IntPtr, Thread>();
     private static readonly Dictionary<IntPtr, bool> ExplorerTaskbarVisibility = new Dictionary<IntPtr, bool>();
@@ -564,6 +569,13 @@ public static class OmniWin32
         };
     }
 
+    private static APPBARDATA NewAppBarData(IntPtr hwnd, RECT rect, uint edge)
+    {
+        APPBARDATA data = NewAppBarData(hwnd, rect);
+        data.uEdge = edge;
+        return data;
+    }
+
     private static bool SetAsShellBackground(IntPtr window, int x, int y, int width, int height)
     {
         int style = GetWindowLongPtr(window, GWL_STYLE).ToInt32();
@@ -644,11 +656,25 @@ public static class OmniWin32
     private static bool ReserveWorkArea(RECT requested, RECT monitorBounds)
     {
         if (!CaptureOriginalWorkArea()) return false;
-        if (requested.Left > monitorBounds.Left + 2
-            || requested.Right < monitorBounds.Right - 2
-            || requested.Top < monitorBounds.Top - 2) return false;
-        RECT reserved = monitorBounds;
-        reserved.Top = Math.Max(monitorBounds.Top, requested.Bottom);
+        RECT reserved = OriginalWorkArea;
+        foreach (var entry in AppBarRectangles) {
+            RECT rectangle = entry.Value;
+            uint edge = AppBarEdges.ContainsKey(entry.Key) ? AppBarEdges[entry.Key] : ABE_TOP;
+            if (edge == ABE_LEFT) {
+                reserved.Left = Math.Max(reserved.Left, rectangle.Right);
+            } else if (edge == ABE_RIGHT) {
+                reserved.Right = Math.Min(reserved.Right, rectangle.Left);
+            } else if (edge == ABE_TOP) {
+                reserved.Top = Math.Max(reserved.Top, rectangle.Bottom);
+            } else if (edge == ABE_BOTTOM) {
+                reserved.Bottom = Math.Min(reserved.Bottom, rectangle.Top);
+            }
+        }
+        if (reserved.Left >= reserved.Right || reserved.Top >= reserved.Bottom) return false;
+        if (reserved.Left < monitorBounds.Left) reserved.Left = monitorBounds.Left;
+        if (reserved.Top < monitorBounds.Top) reserved.Top = monitorBounds.Top;
+        if (reserved.Right > monitorBounds.Right) reserved.Right = monitorBounds.Right;
+        if (reserved.Bottom > monitorBounds.Bottom) reserved.Bottom = monitorBounds.Bottom;
         if (reserved.Top >= reserved.Bottom) return false;
         if (!SystemParametersInfo(SPI_SETWORKAREA, 0, ref reserved, SPIF_SENDCHANGE)) return false;
         WorkAreaReserved = true;
@@ -669,14 +695,38 @@ public static class OmniWin32
         return true;
     }
 
+    private static bool ReapplyAppBarWorkArea()
+    {
+        if (!HasOriginalWorkArea) return true;
+        RECT reserved = OriginalWorkArea;
+        foreach (var entry in AppBarRectangles) {
+            RECT rectangle = entry.Value;
+            uint edge = AppBarEdges.ContainsKey(entry.Key) ? AppBarEdges[entry.Key] : ABE_TOP;
+            if (edge == ABE_LEFT) reserved.Left = Math.Max(reserved.Left, rectangle.Right);
+            else if (edge == ABE_RIGHT) reserved.Right = Math.Min(reserved.Right, rectangle.Left);
+            else if (edge == ABE_TOP) reserved.Top = Math.Max(reserved.Top, rectangle.Bottom);
+            else if (edge == ABE_BOTTOM) reserved.Bottom = Math.Min(reserved.Bottom, rectangle.Top);
+        }
+        if (reserved.Left >= reserved.Right || reserved.Top >= reserved.Bottom) return false;
+        if (!SystemParametersInfo(SPI_SETWORKAREA, 0, ref reserved, SPIF_SENDCHANGE)) return false;
+        WorkAreaReserved = true;
+        return true;
+    }
+
     private static bool IsWorkAreaReserved(RECT requested, RECT monitorBounds)
     {
         RECT current = new RECT();
-        return SystemParametersInfo(SPI_GETWORKAREA, 0, ref current, 0)
-            && current.Top >= requested.Bottom - 2
-            && current.Bottom >= monitorBounds.Bottom - 2
-            && current.Left <= requested.Left + 2
-            && current.Right >= monitorBounds.Right - 2;
+        if (!SystemParametersInfo(SPI_GETWORKAREA, 0, ref current, 0)) return false;
+        if (AppBarRectangles.Count == 0) return true;
+        foreach (var entry in AppBarRectangles) {
+            RECT rectangle = entry.Value;
+            uint appBarEdge = AppBarEdges.ContainsKey(entry.Key) ? AppBarEdges[entry.Key] : ABE_TOP;
+            if (appBarEdge == ABE_LEFT && current.Left < rectangle.Right - 2) return false;
+            if (appBarEdge == ABE_RIGHT && current.Right > rectangle.Left + 2) return false;
+            if (appBarEdge == ABE_TOP && current.Top < rectangle.Bottom - 2) return false;
+            if (appBarEdge == ABE_BOTTOM && current.Bottom > rectangle.Top + 2) return false;
+        }
+        return true;
     }
 
     private static bool PositionFallbackDock(IntPtr window, RECT requested, RECT monitorBounds, int width, int height)
@@ -782,6 +832,24 @@ public static class OmniWin32
         return updated;
     }
 
+    public static bool SetDesktopBottom(long hwnd)
+    {
+        IntPtr window = new IntPtr(hwnd);
+        if (!IsWindow(window)) return false;
+        const uint flags = 0x0213;
+        if (!SetWindowPos(window, new IntPtr(-2), 0, 0, 0, 0, flags)) {
+            int error = Marshal.GetLastWin32Error();
+            if (error == 5) throw new UnauthorizedAccessException("access_denied");
+            throw new InvalidOperationException("SetWindowPos(HWND_NOTOPMOST) failed: " + error);
+        }
+        if (!SetWindowPos(window, new IntPtr(1), 0, 0, 0, 0, flags)) {
+            int error = Marshal.GetLastWin32Error();
+            if (error == 5) throw new UnauthorizedAccessException("access_denied");
+            throw new InvalidOperationException("SetWindowPos(HWND_BOTTOM) failed: " + error);
+        }
+        return true;
+    }
+
     public static bool SetZOrder(long hwnd, string layer)
     {
         IntPtr insertAfter;
@@ -869,7 +937,7 @@ public static class OmniWin32
         return SetAsShellBackground(window, x, y, width, height);
     }
 
-    public static bool SetDock(long hwnd, int x, int y, int width, int height)
+    public static bool SetDock(long hwnd, int x, int y, int width, int height, string edgeName)
     {
         IntPtr window = new IntPtr(hwnd);
         IntPtr monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
@@ -877,20 +945,23 @@ public static class OmniWin32
         MONITORINFO monitorInfo = new MONITORINFO { cbSize = Marshal.SizeOf(typeof(MONITORINFO)) };
         if (!GetMonitorInfo(monitor, ref monitorInfo))
             throw new InvalidOperationException("GetMonitorInfo failed: " + Marshal.GetLastWin32Error());
-        x = monitorInfo.rcMonitor.Left;
-        y = monitorInfo.rcMonitor.Top;
-        width = monitorInfo.rcMonitor.Right - x;
         if (!CaptureOriginalWorkArea()) throw new InvalidOperationException("Could not capture the original Windows work area");
         RECT monitorBounds = monitorInfo.rcMonitor;
         int requestedHeight = Math.Max(1, height);
         RECT requested = new RECT { Left = x, Top = y, Right = x + Math.Max(1, width), Bottom = y + requestedHeight };
-        APPBARDATA data = NewAppBarData(window, requested);
+        uint edge = edgeName == "left" ? ABE_LEFT
+            : edgeName == "right" ? ABE_RIGHT
+            : edgeName == "bottom" ? ABE_BOTTOM
+            : ABE_TOP;
+        APPBARDATA data = NewAppBarData(window, requested, edge);
         if (!AppBars.Contains(window)) {
             if (SHAppBarMessage(ABM_NEW, ref data) == UIntPtr.Zero)
                 return PositionFallbackDock(window, requested, monitorBounds, width, requestedHeight);
             AppBars.Add(window);
         }
-        data = NewAppBarData(window, requested);
+        AppBarRectangles[window] = requested;
+        AppBarEdges[window] = edge;
+        data = NewAppBarData(window, requested, edge);
         if (SHAppBarMessage(ABM_QUERYPOS, ref data) == UIntPtr.Zero) {
             RemoveDock(hwnd);
             return PositionFallbackDock(window, requested, monitorBounds, width, requestedHeight);
@@ -921,7 +992,11 @@ public static class OmniWin32
         APPBARDATA data = NewAppBarData(window, new RECT());
         UIntPtr removed = SHAppBarMessage(ABM_REMOVE, ref data);
         AppBars.Remove(window);
-        bool restored = RestoreWorkArea();
+        AppBarRectangles.Remove(window);
+        AppBarEdges.Remove(window);
+        bool restored = AppBars.Count == 0
+            ? RestoreWorkArea()
+            : ReapplyAppBarWorkArea();
         return (!wasRegistered || removed != UIntPtr.Zero) && restored;
     }
 
@@ -929,12 +1004,16 @@ public static class OmniWin32
     {
         IntPtr window = new IntPtr(hwnd);
         bool wasRegistered = AppBars.Remove(window);
+        AppBarRectangles.Remove(window);
+        AppBarEdges.Remove(window);
         bool removed = true;
         if (wasRegistered) {
             APPBARDATA data = NewAppBarData(window, new RECT());
             removed = SHAppBarMessage(ABM_REMOVE, ref data) != UIntPtr.Zero;
         }
-        bool restored = RestoreWorkArea();
+        bool restored = AppBars.Count == 0
+            ? RestoreWorkArea()
+            : ReapplyAppBarWorkArea();
         return removed && restored;
     }
 
@@ -946,6 +1025,8 @@ public static class OmniWin32
             if (SHAppBarMessage(ABM_REMOVE, ref data) == UIntPtr.Zero) removed = false;
         }
         AppBars.Clear();
+        AppBarRectangles.Clear();
+        AppBarEdges.Clear();
         bool restored = RestoreWorkArea();
         return removed && restored;
     }

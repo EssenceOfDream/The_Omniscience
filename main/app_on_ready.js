@@ -45,7 +45,17 @@ export default async function () {
   await global.$.texts_load();
   await global.$.extensions_setup();
   await global.$.preloads_generate();
-  await global.$.TopBar_create();
   await global.$.mainWindow_create();
   await global.$.ipc_setup();
+  try {
+    await global.mainWindowReady;
+  } catch (error) {
+    console.error('[startup] background window failed to become ready:', error.message);
+    dialog.showErrorBox(
+      'Не удалось запустить рабочий стол',
+      `Панель не будет запущена, пока рабочий стол не готов.\n\n${error.message}`
+    );
+    throw error;
+  }
+  await global.$.TopBar_create();
 }

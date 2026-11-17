@@ -3,7 +3,7 @@ const { BrowserWindow, screen, app, ipcMain } = electronPkg;
 import { attachToWebContents } from './ipc_browserContextMenu.js';
 import {
     restoreWindowsExplorerForShutdown,
-    setWindowsDesktopWindow,
+    keepWindowsDesktopAtBottom,
 } from './ipc_nativeWindows.js';
 import { execFile } from 'node:child_process';
 
@@ -141,7 +141,8 @@ export default async function () {
         height: bounds.height,
         transparent: true,
         backgroundColor: '#00000000',
-        resizable: process.platform !== 'win32',
+        resizable: false,
+        movable: false,
         show: process.platform !== 'win32',
         type: 'desktop',
         frame: false,
@@ -163,9 +164,32 @@ export default async function () {
         // SetParent(WorkerW), после чего окно структурно оказывается под
         // SysListView32 и не получает ни кликов, ни фокуса.
 
-        // Desktop-уровень z-order — ближайший аналог KDE type:'desktop'
-        // без SetParent. Окно остаётся обычным top-level, но внизу z-order.
-        global.mainWindow.setAlwaysOnTop(true, 'desktop');
+        let desktopOrderUpdate = Promise.resolve();
+        let desktopOrderTimer = null;
+        let desktopOrderPending = false;
+        const keepDesktopAtBottom = () => {
+            if (desktopOrderPending
+                || global.mainWindow.isDestroyed()
+                || !global.mainWindow.isVisible()) return;
+            desktopOrderPending = true;
+            desktopOrderUpdate = desktopOrderUpdate
+                .then(() => keepWindowsDesktopAtBottom(global.mainWindow))
+                .catch((error) => {
+                    console.error('[windows-desktop] failed to keep desktop at bottom:', error.message);
+                })
+                .finally(() => {
+                    desktopOrderPending = false;
+                    if (global.mainWindow.isDestroyed()) return;
+                    desktopOrderTimer = setTimeout(keepDesktopAtBottom, 1000);
+                    desktopOrderTimer.unref();
+                });
+        };
+        global.mainWindow.on('blur', keepDesktopAtBottom);
+        global.mainWindow.on('focus', keepDesktopAtBottom);
+        global.mainWindow.on('show', keepDesktopAtBottom);
+        global.mainWindow.once('closed', () => {
+            if (desktopOrderTimer) clearTimeout(desktopOrderTimer);
+        });
 
         // При смене метрик дисплея нужно только пере-применить bounds
         // штатными средствами Electron, без PS1.
@@ -173,7 +197,7 @@ export default async function () {
             if (changedMetrics.includes('bounds') || changedMetrics.includes('workArea')) {
                 const primary = screen.getPrimaryDisplay();
                 global.mainWindow.setBounds(primary.bounds);
-                global.mainWindow.setAlwaysOnTop(true, 'desktop');
+                keepDesktopAtBottom();
             }
         };
         screen.on('display-metrics-changed', handleDisplayMetricsChanged);
@@ -186,7 +210,7 @@ export default async function () {
             // showInactive() специально НЕ фокусирует — было ошибкой.
             global.mainWindow.show();
             global.mainWindow.focus();
-            global.mainWindow.setAlwaysOnTop(true, 'desktop');
+            keepDesktopAtBottom();
         });
     }
 
@@ -217,6 +241,34 @@ export default async function () {
     if (isSession) {
         startWMWatchdog(global.mainWindow);
     }
+
+    const backgroundReady = new Promise((resolve, reject) => {
+        const win = global.mainWindow;
+        const cleanup = () => {
+            win.removeListener('ready-to-show', onReady);
+            win.removeListener('closed', onClosed);
+            win.webContents.removeListener('did-fail-load', onFailedLoad);
+        };
+        const onReady = () => {
+            cleanup();
+            resolve();
+        };
+        const onClosed = () => {
+            cleanup();
+            reject(new Error('Background window closed before it was ready'));
+        };
+        const onFailedLoad = (_event, errorCode, description, url, isMainFrame) => {
+            if (!isMainFrame || errorCode === -3) return;
+            cleanup();
+            reject(new Error(`Background window failed to load (${errorCode}): ${description} (${url})`));
+        };
+
+        win.once('ready-to-show', onReady);
+        win.once('closed', onClosed);
+        win.webContents.on('did-fail-load', onFailedLoad);
+    });
+    global.mainWindowReady = backgroundReady;
+    backgroundReady.catch(() => {});
 
     await global.$.mainWindow_on_loaded();
 }

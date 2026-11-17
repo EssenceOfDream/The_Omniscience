@@ -202,6 +202,15 @@ export async function setWindowsDesktopWindow(win) {
   }
 }
 
+export async function keepWindowsDesktopAtBottom(win) {
+  if (process.platform !== 'win32' || !win || win.isDestroyed()) return false;
+  const hwnd = getWin32Hwnd(win);
+  if (!hwnd) throw new Error('could not read desktop window handle');
+  const positioned = await requestWin32('desktop-bottom', { hwnd });
+  if (!positioned) throw new Error('Windows could not keep the desktop behind other windows');
+  return true;
+}
+
 function enqueueWindowsDockOperation(operation) {
   const result = win32DockQueue.then(operation, operation);
   win32DockQueue = result.then(() => undefined, () => undefined);
@@ -240,6 +249,7 @@ export async function updateWindowsDock(win) {
       const rect = screen.dipToScreenRect(null, win.getBounds());
       const registered = await requestWin32('dock', {
         hwnd, x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+        edge: win._omniAppBarEdge || 'top',
       });
       if (!registered) console.warn('[nativeWindows:win32] failed to register dock appbar:', hwnd);
       return registered;

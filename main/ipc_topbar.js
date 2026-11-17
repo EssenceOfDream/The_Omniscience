@@ -64,6 +64,7 @@ export async function initTopbarState() {
     console.error('[topbar] buildAppsList failed:', err.message);
   }
   enforceTopbarGeometry();
+  broadcastTopbarState();
 }
 
 /* ------------------------------------------------------------------ */

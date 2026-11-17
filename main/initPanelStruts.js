@@ -1,11 +1,11 @@
 import electronPkg from 'electron';
-const { screen } = electronPkg;
+const { BrowserWindow, screen } = electronPkg;
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import {
   hideWindowsDesktopIcons, hideWindowsDesktopWallpaper, hideWindowsTaskbar, removeWindowsDock,
   resetWindowsDock, restoreWindowsDesktopIcons, restoreWindowsDesktopWallpaper,
-  restoreWindowsTaskbar, setWindowsDesktopWindow, updateWindowsDock,
+  restoreWindowsTaskbar, updateWindowsDock,
 } from './ipc_nativeWindows.js';
 
 const execFileAsync = promisify(execFile);
@@ -13,6 +13,67 @@ const execFileAsync = promisify(execFile);
 let applied = false;
 let applyTimer = null;
 let windowsDockReady = false;
+
+function get1pxStrutBounds(edge) {
+  const display = screen.getPrimaryDisplay();
+  const bounds = display.bounds;
+  if (edge === 'left') {
+    return { x: bounds.x, y: bounds.y, width: 1, height: bounds.height };
+  }
+  if (edge === 'right') {
+    return { x: bounds.x + bounds.width - 1, y: bounds.y, width: 1, height: bounds.height };
+  }
+  return { x: bounds.x, y: bounds.y + bounds.height - 1, width: bounds.width, height: 1 };
+}
+
+async function createOrUpdateEdgeStrut(edge) {
+  if (process.platform !== 'win32') return false;
+  let win = global.__omniEdgeStruts?.[edge];
+  if (!win || win.isDestroyed()) {
+    const bounds = get1pxStrutBounds(edge);
+    win = new BrowserWindow({
+      ...bounds,
+      frame: false,
+      transparent: true,
+      backgroundColor: '#00000000',
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      show: false,
+      hasShadow: false,
+      type: 'toolbar',
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        backgroundThrottling: false,
+      },
+    });
+    win._omniAppBarEdge = edge;
+    win.loadURL('about:blank');
+    win.once('ready-to-show', () => {
+      if (!win.isDestroyed()) win.show();
+    });
+    if (!global.__omniEdgeStruts) global.__omniEdgeStruts = {};
+    global.__omniEdgeStruts[edge] = win;
+  } else {
+    try { win.setBounds(get1pxStrutBounds(edge)); } catch { /* ignore */ }
+  }
+  await resetWindowsDock(win);
+  return updateWindowsDock(win);
+}
+
+async function updateEdgeStruts() {
+  if (process.platform !== 'win32') return;
+  await Promise.all([
+    createOrUpdateEdgeStrut('left'),
+    createOrUpdateEdgeStrut('right'),
+    createOrUpdateEdgeStrut('bottom'),
+  ]);
+}
 
 /* ------------------------------------------------------------------ */
 /* XID                                                                 */
@@ -226,9 +287,7 @@ export default function ({ show = true } = {}) {
           await hideWindowsTaskbar();
           //await hideWindowsDesktopIcons();
           await hideWindowsDesktopWallpaper();
-          if (global.mainWindow && !global.mainWindow.isDestroyed()) {
-            await setWindowsDesktopWindow(global.mainWindow);
-          }
+          await updateEdgeStruts();
         } catch (error) {
           console.error('[panelStruts] failed to prepare Explorer shell UI:', error.message);
           await Promise.all([
@@ -264,6 +323,28 @@ export default function ({ show = true } = {}) {
         console.error('[panelStruts] failed to restore Explorer shell UI:', error.message);
       });
       removeWindowsDock(tb);
+      for (const win of Object.values(global.__omniEdgeStruts || {})) {
+        removeWindowsDock(win).catch((error) => {
+          console.error('[panelStruts] failed to remove edge dock:', error.message);
+        });
+        try { win.close(); } catch { /* ignore */ }
+      }
+      global.__omniEdgeStruts = {};
     }
   });
+
+  if (process.platform === 'win32') {
+    const handleMetricsChanged = (_event, _display, changedMetrics) => {
+      if (!changedMetrics.some((metric) =>
+        metric === 'bounds' || metric === 'workArea'
+      )) return;
+      updateEdgeStruts().catch((error) => {
+        console.error('[panelStruts] failed to update edge docks:', error.message);
+      });
+    };
+    screen.on('display-metrics-changed', handleMetricsChanged);
+    tb.once('closed', () => {
+      screen.removeListener('display-metrics-changed', handleMetricsChanged);
+    });
+  }
 }

@@ -504,6 +504,9 @@ while ($null -ne ($line = $reader.ReadLine())) {
                 [OmniWin32]::SetZOrder(
                     [long]$request.hwnd, [string]$request.layer)
             }
+            'desktop-bottom' {
+                [OmniWin32]::SetDesktopBottom([long]$request.hwnd)
+            }
             'prepare-drag' {
                 [OmniWin32]::PrepareDrag(
                     [long]$request.hwnd, [string]$request.mode, [string]$request.direction)
@@ -516,7 +519,7 @@ while ($null -ne ($line = $reader.ReadLine())) {
             'dock' {
                 [OmniWin32]::SetDock(
                     [long]$request.hwnd, [int]$request.x, [int]$request.y,
-                    [int]$request.width, [int]$request.height)
+                    [int]$request.width, [int]$request.height, [string]$request.edge)
             }
             'dock-reset'  { [OmniWin32]::ResetDock([long]$request.hwnd) }
             'dock-remove' { [OmniWin32]::RemoveDock([long]$request.hwnd) }
