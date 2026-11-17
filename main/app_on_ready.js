@@ -6,8 +6,10 @@ export default async function () {
   await app.whenReady();
   if (process.platform === 'win32') {
     try {
-      await restoreWindowsShellForAutostart();
-      await configureWindowsAutostart();
+      const persistentShellIsActive = await restoreWindowsShellForAutostart();
+      if (!persistentShellIsActive) {
+        await configureWindowsAutostart();
+      }
     } catch (error) {
       console.error('[windows-startup] configuration failed:', error.message);
       dialog.showErrorBox(

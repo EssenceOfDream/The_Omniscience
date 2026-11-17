@@ -456,13 +456,18 @@ export async function restoreWindowsShellForAutostart() {
   }
 
   const registry = await readWindowsUserShellRegistry();
+  if (backup.persistentShell === true
+    && isWinlogonMachineShellBackup(backup)
+    && registry.machineWinlogonShell?.value === backup.command) {
+    return true;
+  }
   const managedShellIsActive = isLegacyMachineShellBackup(backup, registry)
     || (isWinlogonMachineShellBackup(backup)
       && registry.machineWinlogonShell?.value === backup.command);
   if (!managedShellIsActive) return false;
 
   await restoreWindowsUserShell();
-  return true;
+  return false;
 }
 
 export async function configureWindowsAutostart() {
