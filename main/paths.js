@@ -24,6 +24,7 @@ export default function () {
         topBarIndex: pathToFileURL(path.join(root, 'dist', 'src', 'topbar.html')).href,
         overviewIndex: pathToFileURL(path.join(root, 'dist', 'src', 'overview.html')).href,
         powerMenuIndex: pathToFileURL(path.join(root, 'dist', 'src', 'power-menu.html')).href,
+        settingsIndex: pathToFileURL(path.join(root, 'dist', 'src', 'settings.html')).href,
 
         reactPreload: path.join(root, '.temp', 'reactPreload.cjs'),
         extensionsPreload: path.join(root, '.temp', 'extensionsPreload.cjs'),

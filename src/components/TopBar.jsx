@@ -63,10 +63,13 @@ export default function TopBar({
           <Box sx={{ flex: 1, minWidth: 0 }} />
           {showClock && <Clock showMs={showClockMs} />}
           <IconButton size="small" onClick={onRequestSearch}
+            aria-label="Поиск"
             sx={{ color: '#fff', WebkitAppRegion: 'no-drag', width: 24, height: 24 }}>
             <SearchIcon sx={{ fontSize: 14 }} />
           </IconButton>
           <IconButton size="small" onClick={onRequestSettings}
+            aria-label="Параметры"
+            title="Параметры"
             sx={{ color: '#fff', WebkitAppRegion: 'no-drag', width: 24, height: 24 }}>
             <SettingsIcon sx={{ fontSize: 14 }} />
           </IconButton>

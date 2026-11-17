@@ -164,6 +164,7 @@ function requestWin32(action, payload = {}, timeoutMs = 10000) {
   });
 }
 
+
 function getWin32Hwnd(win) {
   try {
     const handle = win.getNativeWindowHandle();

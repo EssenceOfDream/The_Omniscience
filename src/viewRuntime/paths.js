@@ -6,21 +6,12 @@ const ABS_RE = /^([a-zA-Z]:[\\/]|\/)/;
 let _cachedRoot = null;
 let _pendingRoot = null;
 
-function fetchRoot() {
-	if (_cachedRoot !== null) return Promise.resolve(_cachedRoot);
-	if (!_pendingRoot) {
-		_pendingRoot = (window.electron_view_API?.getProjectRoot?.() || Promise.resolve(''))
-			.then((r) => { _cachedRoot = r || ''; return _cachedRoot; });
-	}
-	return _pendingRoot;
-}
-
 export function useProjectRoot() {
 	const [root, setRoot] = useState(_cachedRoot);
 	useEffect(() => {
 		if (_cachedRoot !== null) { setRoot(_cachedRoot); return; }
 		let alive = true;
-		fetchRoot().then((r) => { if (alive) setRoot(r); });
+		fetchProjectRoot().then((r) => { if (alive) setRoot(r); });
 		return () => { alive = false; };
 	}, []);
 	return root;

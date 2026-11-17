@@ -1,6 +1,6 @@
 import electronPkg from 'electron';
-const { ipcMain, BrowserWindow, screen, shell, dialog } = electronPkg;
-import { execFile } from 'child_process';
+const { ipcMain, BrowserWindow, screen, dialog } = electronPkg;
+import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import os from 'os';
 import {
@@ -29,7 +29,23 @@ import {
 let cachedApps = [];
 let windowSettingsWin = null;
 let powerMenuWindow = null;
+let systemSettingsWindow = null;
 const execFileAsync = promisify(execFile);
+
+const SYSTEM_SETTINGS_CATEGORIES = {
+  system: ['sysdm.cpl'],
+  devices: ['printers'],
+  network: ['ncpa.cpl'],
+  personalization: ['/name', 'Microsoft.Personalization'],
+  apps: ['appwiz.cpl'],
+  accounts: ['/name', 'Microsoft.UserAccounts'],
+  timeLanguage: ['intl.cpl'],
+  gaming: ['joy.cpl'],
+  accessibility: ['/name', 'Microsoft.EaseOfAccessCenter'],
+  search: ['/name', 'Microsoft.IndexingOptions'],
+  privacy: ['inetcpl.cpl'],
+  update: ['/name', 'Microsoft.WindowsUpdate'],
+};
 
 /* ------------------------------------------------------------------ */
 /* Topbar geometry                                                     */
@@ -271,6 +287,55 @@ function closePowerMenu() {
     return;
   }
   powerMenuWindow.close();
+}
+
+function openSystemSettings() {
+  if (systemSettingsWindow && !systemSettingsWindow.isDestroyed()) {
+    systemSettingsWindow.focus();
+    return;
+  }
+
+  const win = new BrowserWindow({
+    width: 1080,
+    height: 720,
+    minWidth: 800,
+    minHeight: 580,
+    center: true,
+    show: false,
+    backgroundColor: '#ffffff',
+    title: 'Параметры',
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: global.paths.reactPreload,
+      nodeIntegration: false,
+      contextIsolation: true,
+      webSecurity: true,
+    },
+  });
+
+  systemSettingsWindow = win;
+  win.loadURL(global.paths.settingsIndex).catch((error) => {
+    console.error('[settings] failed to load settings page:', error.message);
+    if (!win.isDestroyed()) win.close();
+  });
+  try {
+    registerOwnWindow(win, '__system_settings__', {
+      appId: 'system-settings',
+      title: 'Параметры',
+      icon: null,
+    });
+  } catch (error) {
+    console.error('[settings] failed to register settings window:', error.message);
+  }
+  win.once('ready-to-show', () => {
+    if (!win.isDestroyed()) win.show();
+  });
+  win.on('closed', () => {
+    try { unregisterOwnWindow('__system_settings__'); } catch (error) {
+      console.error('[settings] failed to unregister settings window:', error.message);
+    }
+    if (systemSettingsWindow === win) systemSettingsWindow = null;
+  });
 }
 
 function openPowerMenu() {
@@ -565,9 +630,41 @@ export default function () {
     catch (err) { console.error('[topbar:open-search]', err.message); }
   });
 
-  ipcMain.on('topbar:open-settings', () => {
-    shell.openExternal('ms-settings:')
-      .catch((err) => console.error('[topbar:open-settings]', err.message));
+  ipcMain.on('topbar:open-settings', (event) => {
+    if (event.sender !== global.topbarWindow?.webContents) return;
+    try {
+      openSystemSettings();
+    } catch (error) {
+      console.error('[topbar:open-settings] failed to open settings window:', error.message);
+      dialog.showErrorBox('Не удалось открыть параметры', error.message);
+    }
+  });
+  ipcMain.handle('settings:open-category', (event, { category } = {}) => {
+    if (event.sender !== systemSettingsWindow?.webContents) {
+      return { ok: false, error: 'unauthorized' };
+    }
+    if (typeof category !== 'string'
+      || !Object.prototype.hasOwnProperty.call(SYSTEM_SETTINGS_CATEGORIES, category)) {
+      return { ok: false, error: 'Раздел настроек не найден.' };
+    }
+    const args = SYSTEM_SETTINGS_CATEGORIES[category];
+
+    const controlPath = `${process.env.WINDIR || 'C:\\Windows'}\\System32\\control.exe`;
+    return new Promise((resolve) => {
+      const child = spawn(controlPath, args, {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: false,
+      });
+      child.once('error', (error) => {
+        console.error(`[settings:${category}] failed to open system settings:`, error.message);
+        resolve({ ok: false, error: error.message });
+      });
+      child.once('spawn', () => {
+        child.unref();
+        resolve({ ok: true });
+      });
+    });
   });
 
   ipcMain.on('topbar:logout', () => {

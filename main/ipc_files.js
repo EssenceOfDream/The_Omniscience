@@ -2,7 +2,7 @@ import electronPkg from 'electron';
 const { ipcMain, app, shell, nativeImage, clipboard, webContents, ClipboardItem } = electronPkg;
 import {
     readdir, stat, rename as fsRename, unlink, readFile, rm,
-    mkdir, writeFile, copyFile, access, open, cp,
+    mkdir, writeFile, copyFile, access, open, cp, lstat, realpath,
 } from 'fs/promises';
 import { constants as fsConstants } from 'fs';
 import { watch } from 'fs';
@@ -11,6 +11,8 @@ import { promisify } from 'util';
 import { pathToFileURL, fileURLToPath } from 'url';
 import path from 'path';
 import os from 'os';
+import { decodeDesktopIni, parseDesktopIni } from './desktopIni.js';
+import { mergeDesktopEntries } from './desktopEntries.js';
 
 const execFileAsync = promisify(execFile);
 const yieldToEventLoop = () => new Promise((r) => setImmediate(r));
@@ -131,18 +133,115 @@ function detectMediaKind(name) {
 /* Чтение директории                                                    */
 /* ------------------------------------------------------------------ */
 
+async function getWindowsDesktopPaths() {
+    if (process.platform !== 'win32') return null;
+    try {
+        const userDesktop = await realpath(app.getPath('desktop'));
+        const publicRoot = process.env.PUBLIC || path.join(path.dirname(os.homedir()), 'Public');
+        let publicDesktop = null;
+        try {
+            publicDesktop = await realpath(path.join(publicRoot, 'Desktop'));
+        } catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+        }
+        return { userDesktop, publicDesktop };
+    } catch {
+        return null;
+    }
+}
+
+function isWithinDesktopTree(targetPath, desktopRoots) {
+    if (!desktopRoots) return false;
+    return [desktopRoots.userDesktop, desktopRoots.publicDesktop]
+        .filter(Boolean)
+        .some((rootPath) => {
+            const relativePath = path.relative(rootPath, targetPath);
+            return relativePath === ''
+                || (relativePath !== '..'
+                    && !relativePath.startsWith(`..${path.sep}`)
+                    && !path.isAbsolute(relativePath));
+        });
+}
+
+async function readDesktopIniMetadata(dirPath) {
+    try {
+        const iniPath = path.join(dirPath, 'desktop.ini');
+        const iniStats = await lstat(iniPath);
+        if (!iniStats.isFile() || iniStats.size > 64 * 1024) return null;
+        const content = decodeDesktopIni(await readFile(iniPath));
+        const metadata = parseDesktopIni(content, dirPath);
+        if (metadata.iconPath) {
+            try {
+                if (!(await stat(metadata.iconPath)).isFile()) metadata.iconPath = null;
+            } catch (error) {
+                if (error.code === 'ENOENT') metadata.iconPath = null;
+                else throw error;
+            }
+        }
+        return metadata;
+    } catch (error) {
+        if (error.code !== 'ENOENT') {
+            console.warn('[fs:desktop.ini] failed to read desktop metadata:', dirPath, error.message);
+        }
+        return null;
+    }
+}
+
 async function readDir(dirPath) {
     try {
-        const entries = await readdir(dirPath, { withFileTypes: true });
+        const desktopRoots = await getWindowsDesktopPaths();
+        const targetPath = await realpath(dirPath);
+        const isDesktopTree = isWithinDesktopTree(targetPath, desktopRoots);
+        const isUserDesktopRoot = !!desktopRoots
+            && path.relative(desktopRoots.userDesktop, targetPath) === '';
+        const entries = await readdir(targetPath, { withFileTypes: true });
+        let directoryEntries = entries.map((entry) => ({ entry, directory: targetPath }));
+
+        if (isUserDesktopRoot && desktopRoots.publicDesktop
+            && path.relative(desktopRoots.userDesktop, desktopRoots.publicDesktop) !== '') {
+            try {
+                const publicEntries = await readdir(desktopRoots.publicDesktop, { withFileTypes: true });
+                directoryEntries = mergeDesktopEntries(
+                    directoryEntries.map(({ entry }) => entry),
+                    publicEntries,
+                    desktopRoots.userDesktop,
+                    desktopRoots.publicDesktop,
+                );
+            } catch (error) {
+                if (error.code !== 'ENOENT' && error.code !== 'EACCES' && error.code !== 'EPERM') {
+                    console.warn('[fs:read-dir] failed to read Public Desktop:', error.message);
+                }
+            }
+        }
+
         const files = [];
-        for (const entry of entries) {
-            const fullPath = path.join(dirPath, entry.name);
+        const userMetadata = isDesktopTree ? await readDesktopIniMetadata(targetPath) : null;
+        let directoryMetadata = userMetadata;
+        if (isUserDesktopRoot && desktopRoots?.publicDesktop) {
+            const publicMetadata = await readDesktopIniMetadata(desktopRoots.publicDesktop);
+            if (publicMetadata) {
+                directoryMetadata = {
+                    localizedName: userMetadata?.localizedName || publicMetadata.localizedName || null,
+                    infoTip: userMetadata?.infoTip || publicMetadata.infoTip || null,
+                    iconPath: userMetadata?.iconPath || publicMetadata.iconPath || null,
+                };
+            }
+        }
+        for (const { entry, directory } of directoryEntries) {
+            if (isDesktopTree && entry.name.toLowerCase() === 'desktop.ini') continue;
+            const fullPath = path.join(directory, entry.name);
             try {
                 const stats = await stat(fullPath);
+                const metadata = isDesktopTree && entry.isDirectory() && !entry.isSymbolicLink()
+                    ? await readDesktopIniMetadata(fullPath)
+                    : null;
                 files.push({
                     id: fullPath,
                     fileUrl: toFileUrl(fullPath),
                     name: entry.name,
+                    displayName: metadata?.localizedName || entry.name,
+                    infoTip: metadata?.infoTip || null,
+                    iconPath: metadata?.iconPath || null,
                     isDir: stats.isDirectory(),
                     isSymlink: stats.isSymbolicLink(),
                     size: stats.size,
@@ -151,7 +250,7 @@ async function readDir(dirPath) {
                 });
             } catch (_) { /* пропускаем */ }
         }
-        return { success: true, files };
+        return { success: true, files, directoryMetadata };
     } catch (err) {
         const denied = err.code === 'EACCES' || err.code === 'EPERM';
         return {

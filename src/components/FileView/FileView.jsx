@@ -118,11 +118,14 @@ function FileItem({
     file, selected, cut, onSelect, onOpen, onContextRequest,
     onDragRequest, registerRef, autoPlayVideo,
 }) {
-    const iconUrl = useFileIcon(file.id);
+    const iconUrl = useFileIcon(file.iconPath || file.id);
     const [iconFailed, setIconFailed] = useState(false);
     const [mediaFailed, setMediaFailed] = useState(false);
 
-    useEffect(() => { setIconFailed(false); setMediaFailed(false); }, [file.id]);
+    useEffect(() => {
+        setIconFailed(false);
+        setMediaFailed(false);
+    }, [file.id, file.iconPath]);
 
     const setRef = useCallback((el) => { registerRef(file.id, el); }, [file.id, registerRef]);
 
@@ -158,6 +161,7 @@ function FileItem({
             onMouseDown={handleMouseDown}
             onContextMenu={(e) => e.stopPropagation()}
             onDragStart={handleDragStart}
+            title={file.infoTip || undefined}
             sx={{
                 display: 'flex', flexDirection: 'column', alignItems: 'center',
                 gap: 0.5, p: 1, borderRadius: 0,
@@ -206,7 +210,7 @@ function FileItem({
                     display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
                 }}
             >
-                {file.name}
+                {file.displayName || file.name}
             </Typography>
         </Box>
     );
@@ -227,7 +231,9 @@ function FileViewInner({ basePath }) {
     const [dragOver, setDragOver] = useState(false);
 
     /* --- Единственная подписка на директорию --- */
-    const { files, loading, error, reload } = useDirectory(currentPath);
+    const {
+        files, directoryMetadata, loading, error, reload,
+    } = useDirectory(currentPath);
 
     /* --- Радиус --- */
     const initialRadius = (() => {
@@ -633,6 +639,7 @@ function FileViewInner({ basePath }) {
     /* --- Рендер --- */
     return (
         <Box
+            title={directoryMetadata?.infoTip || undefined}
             sx={{
                 position: 'absolute', inset: 0, zIndex: 0,
                 display: 'flex', flexDirection: 'column',
@@ -676,13 +683,16 @@ function FileViewInner({ basePath }) {
                                 component="button"
                                 underline="hover"
                                 onClick={() => handleNavigateTo(c.path)}
+                                title={last ? directoryMetadata?.infoTip || undefined : undefined}
                                 sx={{
                                     color: last ? '#fff' : '#aaa',
                                     fontSize: 13, fontFamily: 'monospace',
                                     whiteSpace: 'nowrap', cursor: 'pointer',
                                 }}
                             >
-                                {c.name}
+                                {last && directoryMetadata?.localizedName
+                                    ? directoryMetadata.localizedName
+                                    : c.name}
                             </Link>
                         );
                     })}

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 
 export default function useDirectory(path) {
   const [files, setFiles] = useState([]);
+  const [directoryMetadata, setDirectoryMetadata] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const requestIdRef = useRef(0);
@@ -11,6 +12,7 @@ export default function useDirectory(path) {
   const load = useCallback(async (targetPath) => {
     if (!targetPath) {
       setFiles([]);
+      setDirectoryMetadata(null);
       return;
     }
 
@@ -26,17 +28,24 @@ export default function useDirectory(path) {
       if (!res.success) {
         setError(res.error || 'unknown');
         setFiles([]);
+        setDirectoryMetadata(null);
       } else {
         const sorted = [...res.files].sort((a, b) => {
           if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-          return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+          return (a.displayName || a.name).localeCompare(
+            b.displayName || b.name,
+            undefined,
+            { sensitivity: 'base' },
+          );
         });
         setFiles(sorted);
+        setDirectoryMetadata(res.directoryMetadata || null);
       }
     } catch (err) {
       if (reqId !== requestIdRef.current) return;
       setError(err?.message || 'unknown');
       setFiles([]);
+      setDirectoryMetadata(null);
     } finally {
       if (reqId === requestIdRef.current) setLoading(false);
     }
@@ -75,5 +84,5 @@ export default function useDirectory(path) {
 
   const reload = useCallback(() => load(path), [path, load]);
 
-  return { files, loading, error, reload };
+  return { files, directoryMetadata, loading, error, reload };
 }
