@@ -43,9 +43,7 @@ export default function SettingsHome() {
   const openCategory = async (id) => {
     setError('');
     try {
-      const result = await window.electron_topbar_API?.invoke('settings:open-category', {
-        category: id,
-      });
+      const result = await window.electron_windowsSettings_API?.openCategory(id);
       if (!result?.ok) throw new Error(result?.error || 'Нет ответа от Windows');
     } catch (openError) {
       setError(`Не удалось открыть раздел: ${openError.message}`);

@@ -63,7 +63,6 @@ export default async function () {
     topbar: path.join(rootDir, 'src', 'topbar.html'),
     overview: path.join(rootDir, 'src', 'overview.html'),
     powerMenu: path.join(rootDir, 'src', 'power-menu.html'),
-    settings: path.join(rootDir, 'src', 'settings.html'),
   };
 
   const componentInputs = [];
