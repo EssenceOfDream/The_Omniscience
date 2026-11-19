@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('Install', 'Restore')]
-    [string]$Action
+    [ValidateSet('Install', 'ConfigureTaskbar', 'Restore')]
+    [string]$Action,
+    [switch]$ApplyNow
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,7 +17,7 @@ $runPath = 'Software\Microsoft\Windows\CurrentVersion\Run'
 $runName = 'The_Omniscience'
 $runCommand = '"' + $electronPath + '" "' + $projectRoot + '"'
 
-function Set-TaskbarTopAndAutoHide {
+function Set-TaskbarTopAndVisible {
     $settingsPath = 'Software\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3'
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($settingsPath, $true)
     if ($null -eq $key) {
@@ -33,18 +34,146 @@ function Set-TaskbarTopAndAutoHide {
             throw 'Windows taskbar settings have an unsupported format; no registry values were changed.'
         }
 
-        $settings[8] = [byte]0x01
-        # StuckRects3 byte 12 controls auto-hide; 0x03 keeps the taskbar visible.
-        $settings[12] = [byte]0x03
+        # Bit 0 of byte 8 enables auto-hide; byte 12 selects the edge (0x01 is top).
+        $settings[8] = [byte]($settings[8] -band 0xFE)
+        $settings[12] = [byte]0x01
         $key.SetValue('Settings', $settings, [Microsoft.Win32.RegistryValueKind]::Binary)
 
         $verified = $key.GetValue('Settings')
-        if ($verified -isnot [byte[]] -or $verified[8] -ne 0x01 -or $verified[12] -ne 0x03) {
+        if ($verified -isnot [byte[]] -or ($verified[8] -band 0x01) -ne 0 -or $verified[12] -ne 0x01) {
             throw 'Windows taskbar registry settings did not verify.'
         }
     } finally {
         $key.Dispose()
     }
+}
+
+function Apply-TaskbarSettingsNow {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class OmniTaskbarRuntime {
+    private const uint ABM_GETSTATE = 0x00000004;
+    private const uint ABM_SETSTATE = 0x0000000A;
+    private const uint ABS_AUTOHIDE = 0x00000001;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct APPBARDATA {
+        public int cbSize;
+        public IntPtr hWnd;
+        public uint uCallbackMessage;
+        public uint uEdge;
+        public RECT rc;
+        public IntPtr lParam;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr FindWindow(string className, string windowName);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+
+    [DllImport("shell32.dll", EntryPoint = "SHAppBarMessage")]
+    private static extern UIntPtr SHAppBarMessage(uint message, ref APPBARDATA data);
+
+    private static IntPtr GetTaskbar() {
+        IntPtr taskbar = FindWindow("Shell_TrayWnd", null);
+        if (taskbar == IntPtr.Zero)
+            throw new InvalidOperationException("Windows taskbar was not found.");
+        return taskbar;
+    }
+
+    private static APPBARDATA NewData(IntPtr taskbar) {
+        return new APPBARDATA {
+            cbSize = Marshal.SizeOf(typeof(APPBARDATA)),
+            hWnd = taskbar
+        };
+    }
+
+    public static bool TryDisableAutoHide() {
+        IntPtr taskbar = FindWindow("Shell_TrayWnd", null);
+        if (taskbar == IntPtr.Zero) return false;
+        APPBARDATA data = NewData(taskbar);
+        uint state = (uint)SHAppBarMessage(ABM_GETSTATE, ref data).ToUInt64();
+        if ((state & ABS_AUTOHIDE) == 0) return true;
+        data.lParam = new IntPtr((long)(state & ~ABS_AUTOHIDE));
+        SHAppBarMessage(ABM_SETSTATE, ref data);
+        data = NewData(taskbar);
+        state = (uint)SHAppBarMessage(ABM_GETSTATE, ref data).ToUInt64();
+        return (state & ABS_AUTOHIDE) == 0;
+    }
+
+    public static bool IsAtTop(int top) {
+        RECT rect;
+        IntPtr taskbar = FindWindow("Shell_TrayWnd", null);
+        return taskbar != IntPtr.Zero && GetWindowRect(taskbar, out rect) && rect.Top == top;
+    }
+
+    public static int GetTaskbarProcessId() {
+        IntPtr taskbar = GetTaskbar();
+        uint processId;
+        GetWindowThreadProcessId(taskbar, out processId);
+        return checked((int)processId);
+    }
+}
+'@
+
+    if (-not [OmniTaskbarRuntime]::TryDisableAutoHide()) {
+        throw 'Could not disable Windows taskbar auto-hide.'
+    }
+
+    $primaryTop = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Top
+    if ([OmniTaskbarRuntime]::IsAtTop($primaryTop)) {
+        Write-Output 'Windows taskbar is already at the top and auto-hide is disabled.'
+        return
+    }
+
+    $taskbarProcessId = [OmniTaskbarRuntime]::GetTaskbarProcessId()
+    $taskbarProcess = Get-Process -Id $taskbarProcessId -ErrorAction Stop
+    if ($taskbarProcess.ProcessName -ne 'explorer') {
+        throw 'The Windows taskbar is not owned by Explorer; refusing to restart another process.'
+    }
+
+    Write-Output 'Restarting Explorer to apply the top taskbar position.'
+    Stop-Process -Id $taskbarProcessId -Force -ErrorAction Stop
+    Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe')
+
+    $deadline = (Get-Date).AddSeconds(20)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 250
+        $autoHideDisabled = [OmniTaskbarRuntime]::TryDisableAutoHide()
+        $taskbarAtTop = [OmniTaskbarRuntime]::IsAtTop($primaryTop)
+        if ($autoHideDisabled -and $taskbarAtTop) {
+            Write-Output 'Windows taskbar is at the top and auto-hide is disabled.'
+            return
+        }
+    }
+    throw 'Explorer restarted but did not apply the top taskbar settings.'
+}
+
+if ($Action -eq 'ConfigureTaskbar') {
+    Set-TaskbarTopAndVisible
+    if ($ApplyNow) {
+        Apply-TaskbarSettingsNow
+    }
+    Write-Output 'Windows taskbar set to top with auto-hide disabled.'
+    if (-not $ApplyNow) {
+        Write-Output 'Explorer applies these settings at the next Windows sign-in.'
+    }
+    return
 }
 
 $runKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($runPath, $true)
@@ -72,7 +201,7 @@ try {
             throw "An unrelated Windows startup entry named $runName already exists; it was not overwritten."
         }
 
-        Set-TaskbarTopAndAutoHide
+        Set-TaskbarTopAndVisible
         $runKey.SetValue($runName, $runCommand, [Microsoft.Win32.RegistryValueKind]::String)
         if ([string]$runKey.GetValue($runName) -cne $runCommand) {
             throw 'Omniscience autostart registration did not verify.'

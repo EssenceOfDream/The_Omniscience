@@ -57,7 +57,6 @@ public static class OmniWin32
     private const uint ABM_QUERYPOS = 0x00000002;
     private const uint ABM_SETPOS = 0x00000003;
     private const uint ABM_GETSTATE = 0x00000004;
-    private const uint ABM_SETSTATE = 0x0000000A;
     private const uint ABE_TOP = 1;
     private const uint ABE_LEFT = 0;
     private const uint ABE_RIGHT = 2;
@@ -83,15 +82,12 @@ public static class OmniWin32
     private static readonly EnumWindowsProc PanelWindowEnumerator = EnumerateWindowForPanelGuard;
     private static readonly EnumWindowsProc WindowEnumerator = EnumerateWindow;
     private static readonly Dictionary<IntPtr, Thread> ActiveDrags = new Dictionary<IntPtr, Thread>();
-    private static readonly Dictionary<IntPtr, bool> ExplorerTaskbarVisibility = new Dictionary<IntPtr, bool>();
     private static readonly Dictionary<IntPtr, bool> ExplorerDesktopIconVisibility = new Dictionary<IntPtr, bool>();
     private static string OriginalDesktopWallpaper;
     private static bool HasOriginalDesktopWallpaper;
     private static bool OriginalWallpaperRegistryValueExists;
     private static string OriginalWallpaperRegistryValue;
     private static RegistryValueKind OriginalWallpaperRegistryValueKind;
-    private static uint OriginalTaskbarAppBarState;
-    private static bool HasOriginalTaskbarAppBarState;
     private static RECT OriginalWorkArea;
     private static bool HasOriginalWorkArea;
     private static bool WorkAreaReserved;
@@ -360,70 +356,10 @@ public static class OmniWin32
         return false;
     }
 
-    public static bool HideExplorerTaskbar()
-    {
-        ShellWindowState state = GetExplorerShellState();
-        if (state.Taskbars.Count == 0) return false;
-        foreach (IntPtr taskbar in state.Taskbars) {
-            if (!IsWindow(taskbar)) continue;
-            if (!ExplorerTaskbarVisibility.ContainsKey(taskbar))
-                ExplorerTaskbarVisibility.Add(taskbar, IsWindowVisible(taskbar));
-        }
-        IntPtr primaryTaskbar = state.Taskbars[0];
-        if (!HasOriginalTaskbarAppBarState) {
-            OriginalTaskbarAppBarState = GetTaskbarAppBarState(primaryTaskbar);
-            HasOriginalTaskbarAppBarState = true;
-        }
-        if (!SetTaskbarAppBarState(primaryTaskbar, OriginalTaskbarAppBarState | ABS_AUTOHIDE)
-            || (GetTaskbarAppBarState(primaryTaskbar) & ABS_AUTOHIDE) == 0) {
-            RestoreTaskbarAppBarState(primaryTaskbar);
-            return false;
-        }
-        foreach (IntPtr taskbar in state.Taskbars) {
-            if (!IsWindow(taskbar)) continue;
-            ShowWindow(taskbar, SW_HIDE);
-            if (IsWindowVisible(taskbar)) { RestoreExplorerTaskbar(); return false; }
-        }
-        return true;
-    }
-
     private static uint GetTaskbarAppBarState(IntPtr taskbar)
     {
         APPBARDATA data = NewAppBarData(taskbar, new RECT());
         return (uint)SHAppBarMessage(ABM_GETSTATE, ref data).ToUInt64();
-    }
-
-    private static bool RestoreTaskbarAppBarState(IntPtr taskbar)
-    {
-        if (!HasOriginalTaskbarAppBarState) return true;
-        if (!SetTaskbarAppBarState(taskbar, OriginalTaskbarAppBarState)) return false;
-        if ((GetTaskbarAppBarState(taskbar) & ABS_AUTOHIDE)
-            != (OriginalTaskbarAppBarState & ABS_AUTOHIDE)) return false;
-        HasOriginalTaskbarAppBarState = false;
-        return true;
-    }
-
-    private static bool SetTaskbarAppBarState(IntPtr taskbar, uint state)
-    {
-        APPBARDATA data = NewAppBarData(taskbar, new RECT());
-        data.lParam = new IntPtr(state);
-        return SHAppBarMessage(ABM_SETSTATE, ref data) != UIntPtr.Zero;
-    }
-
-    public static bool RestoreExplorerTaskbar()
-    {
-        ShellWindowState state = GetExplorerShellState();
-        IntPtr taskbarForState = state.Taskbars.Count > 0 ? state.Taskbars[0] : IntPtr.Zero;
-        if (!RestoreTaskbarAppBarState(taskbarForState)) return false;
-        foreach (IntPtr taskbar in state.Taskbars) {
-            if (!IsWindow(taskbar)) continue;
-            bool originalVisibility;
-            if (!ExplorerTaskbarVisibility.TryGetValue(taskbar, out originalVisibility)) continue;
-            ShowWindow(taskbar, originalVisibility ? SW_SHOWNOACTIVATE : SW_HIDE);
-            if (IsWindowVisible(taskbar) != originalVisibility) return false;
-            ExplorerTaskbarVisibility.Remove(taskbar);
-        }
-        return true;
     }
 
     public static bool HideExplorerDesktopIcons()

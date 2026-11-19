@@ -2,6 +2,7 @@ import electronPkg from 'electron';
 const { app, dialog, session } = electronPkg;
 import {
   configureWindowsAutostart,
+  configureWindowsTaskbar,
   ensureWindowsExplorerShell,
   restoreWindowsShellForAutostart,
 } from './ipc_nativeWindows.js';
@@ -22,11 +23,13 @@ export default async function () {
 
     try {
       await ensureWindowsExplorerShell();
+      await configureWindowsTaskbar();
+      await ensureWindowsExplorerShell();
     } catch (error) {
-      console.error('[windows-startup] Explorer shell could not be started:', error.message);
+      console.error('[windows-startup] Explorer taskbar configuration failed:', error.message);
       dialog.showErrorBox(
-        'Не удалось запустить Explorer',
-        `Explorer должен оставаться запущенным вместе с Omniscience.\n\n${error.message}`
+        'Не удалось настроить панель Windows',
+        `Не удалось переместить панель задач Windows наверх и отключить её автоскрытие.\n\n${error.message}`
       );
     }
   }

@@ -454,6 +454,20 @@ export async function configureWindowsAutostart() {
   return true;
 }
 
+export async function configureWindowsTaskbar() {
+  if (process.platform !== 'win32') {
+    throw new Error('Windows taskbar configuration is only supported on Windows');
+  }
+  const scriptPath = fileURLToPath(new URL('./manageWindowsAutostart.ps1', import.meta.url));
+  const { stdout } = await execFileAsync('powershell.exe', [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+    '-File', scriptPath, '-Action', 'ConfigureTaskbar', '-ApplyNow',
+  ], { windowsHide: true, encoding: 'utf8' });
+  const output = stdout.trim();
+  if (output) console.log(`[windows-taskbar] ${output.replace(/\r?\n/g, ' ')}`);
+  return true;
+}
+
 async function ensureExplorerShell() {
   let status = await requestWin32('explorer-shell-status');
   if (!status?.taskbar || !status?.desktop) {
