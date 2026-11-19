@@ -1,9 +1,22 @@
 import electronPkg from 'electron';
 const { app, ipcMain, shell } = electronPkg;
 import { readdir, readFile, access } from 'fs/promises';
-import { spawn } from 'child_process';
+import { execFile, spawn } from 'child_process';
+import { promisify } from 'util';
 import path from 'path';
 import os from 'os';
+import { fileURLToPath } from 'url';
+import { isWindowsUwpAppUserModelId, parseWindowsUwpApps } from './windowsUwpApps.js';
+
+const execFileAsync = promisify(execFile);
+const WINDOWS_UWP_HOST_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'windowsUwpHost.ps1');
+const POWERSHELL_PATH = path.join(
+  process.env.SystemRoot || 'C:\\Windows',
+  'System32',
+  'WindowsPowerShell',
+  'v1.0',
+  'powershell.exe',
+);
 
 /* ------------------------------------------------------------------ */
 /* Где искать .desktop файлы                                           */
@@ -206,6 +219,31 @@ async function scanWindowsShortcuts() {
     path.join(process.env.ProgramData || 'C:\\ProgramData', startMenu),
   ];
   for (const dir of dirs) await collectShortcuts(dir, result, seen);
+
+  try {
+    const { stdout } = await execFileAsync(POWERSHELL_PATH, [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', WINDOWS_UWP_HOST_PATH, '-Action', 'List',
+    ], { windowsHide: true, timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+    for (const app of parseWindowsUwpApps(stdout)) {
+      result.push({
+        id: `uwp:${app.appUserModelId.toLowerCase()}`,
+        nativeId: app.appUserModelId,
+        title: app.title,
+        icon: null,
+        kind: 'native',
+        launchType: 'uwp',
+        appUserModelId: app.appUserModelId,
+        exec: null,
+        terminal: false,
+        comment: '',
+        categories: '',
+      });
+    }
+  } catch (err) {
+    console.error('[nativeApps] failed to enumerate packaged Windows apps:', err.message);
+  }
+
   return result;
 }
 
@@ -277,9 +315,19 @@ export default function () {
     return cachedNativeApps;
   });
 
-  ipcMain.on('launch-native-app', async (_e, { exec, terminal }) => {
+  ipcMain.on('launch-native-app', async (_e, { exec, terminal, appUserModelId }) => {
     try {
       if (process.platform === 'win32') {
+        if (appUserModelId) {
+          if (!isWindowsUwpAppUserModelId(appUserModelId)) {
+            throw new Error('Invalid packaged application ID');
+          }
+          await execFileAsync(POWERSHELL_PATH, [
+            '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+            '-File', WINDOWS_UWP_HOST_PATH, '-Action', 'Launch', '-AppId', appUserModelId,
+          ], { windowsHide: true, timeout: 30000 });
+          return;
+        }
         const error = await shell.openPath(exec);
         if (error) console.error('[launch-native-app]', error);
         return;

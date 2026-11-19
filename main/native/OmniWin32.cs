@@ -360,20 +360,6 @@ public static class OmniWin32
         return false;
     }
 
-    private static bool ShowExplorerShellUi()
-    {
-        ShellWindowState state = GetExplorerShellState();
-        if (!state.HasTaskbar || !state.HasDesktop || state.DesktopViews.Count == 0) return false;
-        var windows = new List<IntPtr>(state.Taskbars);
-        windows.AddRange(state.DesktopViews);
-        foreach (IntPtr window in windows) {
-            if (!IsWindow(window)) continue;
-            ShowWindow(window, SW_SHOWNOACTIVATE);
-            if (!IsWindowVisible(window)) return false;
-        }
-        return true;
-    }
-
     public static bool HideExplorerTaskbar()
     {
         ShellWindowState state = GetExplorerShellState();
@@ -1015,6 +1001,10 @@ public static class OmniWin32
     public static object GetExplorerShellStatus()
     {
         ShellWindowState state = GetExplorerShellState();
+        IntPtr primaryTaskbar = FindWindow("Shell_TrayWnd", null);
+        RECT taskbarBounds = new RECT();
+        bool hasTaskbarBounds = primaryTaskbar != IntPtr.Zero
+            && GetWindowRect(primaryTaskbar, out taskbarBounds);
         RECT workArea = new RECT();
         if (!SystemParametersInfo(SPI_GETWORKAREA, 0, ref workArea, 0))
             throw new InvalidOperationException("Could not read the Windows work area: " + Marshal.GetLastWin32Error());
@@ -1022,6 +1012,12 @@ public static class OmniWin32
             running = state.ProcessIds.Count > 0,
             taskbar = state.HasTaskbar,
             desktop = state.HasDesktop,
+            taskbarBounds = hasTaskbarBounds ? (object)new {
+                x = taskbarBounds.Left,
+                y = taskbarBounds.Top,
+                width = taskbarBounds.Right - taskbarBounds.Left,
+                height = taskbarBounds.Bottom - taskbarBounds.Top
+            } : null,
             taskbarVisible = IsAnyWindowVisible(state.Taskbars),
             taskbarAutoHide = state.Taskbars.Count > 0
                 && (GetTaskbarAppBarState(state.Taskbars[0]) & ABS_AUTOHIDE) != 0,
@@ -1051,12 +1047,6 @@ public static class OmniWin32
             if (state.HasTaskbar && state.HasDesktop) return true;
         }
         return false;
-    }
-
-    public static bool StartExplorerShellVisible()
-    {
-        if (!StartExplorerShell()) return false;
-        return ShowExplorerShellUi();
     }
 
     private static bool GetWorkAreaForBounds(RECT bounds, out RECT workArea)

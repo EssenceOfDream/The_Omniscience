@@ -9,28 +9,6 @@ internal static class OmniShellHost
 {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr FindWindow(string className, string windowName);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string windowName);
-    [DllImport("user32.dll")]
-    private static extern bool IsWindowVisible(IntPtr hwnd);
-    [DllImport("user32.dll")]
-    private static extern bool ShowWindow(IntPtr hwnd, int command);
-
-    private const int SW_SHOWNOACTIVATE = 4;
-
-    private static bool RestoreExplorerDesktop()
-    {
-        IntPtr taskbar = FindWindow("Shell_TrayWnd", null);
-        if (taskbar == IntPtr.Zero) return false;
-        ShowWindow(taskbar, SW_SHOWNOACTIVATE);
-
-        IntPtr programManager = FindWindow("Progman", null);
-        IntPtr desktopView = programManager == IntPtr.Zero
-            ? IntPtr.Zero
-            : FindWindowEx(programManager, IntPtr.Zero, "SHELLDLL_DefView", null);
-        if (desktopView != IntPtr.Zero) ShowWindow(desktopView, SW_SHOWNOACTIVATE);
-        return IsWindowVisible(taskbar);
-    }
 
     private static int Main(string[] args)
     {
@@ -121,9 +99,7 @@ internal static class OmniShellHost
         IntPtr taskbar = FindWindow("Shell_TrayWnd", null);
         if (taskbar != IntPtr.Zero)
         {
-            WriteLog(RestoreExplorerDesktop()
-                ? "Explorer desktop and taskbar are visible; fallback skipped."
-                : "Explorer taskbar exists but could not be made visible.");
+            WriteLog("Explorer taskbar exists; fallback skipped.");
             return;
         }
 
@@ -147,9 +123,9 @@ internal static class OmniShellHost
                 }
                 for (int attempt = 0; attempt < 150; attempt++)
                 {
-                    if (RestoreExplorerDesktop())
+                    if (FindWindow("Shell_TrayWnd", null) != IntPtr.Zero)
                     {
-                        WriteLog("Explorer desktop and taskbar appeared.");
+                        WriteLog("Explorer taskbar appeared.");
                         return;
                     }
                     Thread.Sleep(100);

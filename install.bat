@@ -41,8 +41,14 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo [5/5] Installing shell...
-call npm run windows:shell:install
+echo [5/5] Configuring Windows taskbar and Omniscience autostart...
+call npm run windows:setup
+if %errorlevel% neq 0 (
+    echo.
+    echo ERROR: Windows configuration failed. Installation aborted.
+    pause
+    exit /b %errorlevel%
+)
 
 echo.
 echo ============================================

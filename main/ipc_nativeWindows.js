@@ -21,19 +21,9 @@ const execFileAsync = promisify(execFile);
 
 process.on('unhandledRejection', (reason) => {
   if (DEBUG) console.warn('[nativeWindows] unhandledRejection:', reason?.message || reason);
-  if (win32TaskbarHidden) {
-    recoverWindowsShell(reason?.stack || reason?.message || String(reason)).catch((error) => {
-      console.error('[windows-shell] recovery after unhandled rejection failed:', error.message);
-    });
-  }
 });
 process.on('uncaughtException', (err) => {
   console.error('[nativeWindows] uncaughtException:', err);
-  if (win32TaskbarHidden) {
-    recoverWindowsShell(err?.stack || err?.message || String(err)).catch((error) => {
-      console.error('[windows-shell] recovery after uncaught exception failed:', error.message);
-    });
-  }
 });
 
 /* ------------------------------------------------------------------ */
@@ -83,7 +73,6 @@ let win32RefreshPromise = null;
 let win32Windows = [];
 let win32ActiveHwnd = null;
 let win32LastHash = '';
-let win32TaskbarHidden = false;
 let win32ShellRecovery = null;
 let win32ShellFailureSuppressedUntil = 0;
 
@@ -261,17 +250,6 @@ export async function updateWindowsDock(win) {
   });
 }
 
-export async function startWindowsPanelGuard(panelWindows = []) {
-  if (process.platform !== 'win32') return false;
-  const excludedWindows = panelWindows.map(getWin32Hwnd).filter(Boolean);
-  return requestWin32('panel-window-guard-start', { excludedWindows });
-}
-
-export async function stopWindowsPanelGuard() {
-  if (process.platform !== 'win32') return false;
-  return requestWin32('panel-window-guard-stop');
-}
-
 export async function removeWindowsDock(win) {
   if (!win) return false;
   win32DockInitialized.delete(win);
@@ -292,44 +270,6 @@ export async function setWindowsDockSuppressed(win, suppressed) {
   if (suppressed) win32DockSuppressed.add(win);
   else win32DockSuppressed.delete(win);
   return updateWindowsDock(win);
-}
-
-export async function hideWindowsTaskbar() {
-  const hidden = await requestWin32('taskbar-hide');
-  if (!hidden) throw new Error('Windows taskbar could not be hidden');
-  win32TaskbarHidden = true;
-  return true;
-}
-
-export async function restoreWindowsTaskbar() {
-  const restored = await requestWin32('taskbar-restore');
-  if (!restored) throw new Error('Windows taskbar could not be restored');
-  win32TaskbarHidden = false;
-  return true;
-}
-
-export async function hideWindowsDesktopIcons() {
-  const hidden = await requestWin32('desktop-icons-hide');
-  if (!hidden) throw new Error('Windows desktop icons could not be hidden');
-  return true;
-}
-
-export async function restoreWindowsDesktopIcons() {
-  const restored = await requestWin32('desktop-icons-restore');
-  if (!restored) throw new Error('Windows desktop icons could not be restored');
-  return true;
-}
-
-export async function hideWindowsDesktopWallpaper() {
-  const hidden = await requestWin32('desktop-wallpaper-hide');
-  if (!hidden) throw new Error('Windows desktop wallpaper could not be disabled');
-  return true;
-}
-
-export async function restoreWindowsDesktopWallpaper() {
-  const restored = await requestWin32('desktop-wallpaper-restore');
-  if (!restored) throw new Error('Windows desktop wallpaper could not be restored');
-  return true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -478,11 +418,6 @@ export async function restoreWindowsShellForAutostart() {
   }
 
   const registry = await readWindowsUserShellRegistry();
-  if (backup.persistentShell === true
-    && isWinlogonMachineShellBackup(backup)
-    && registry.machineWinlogonShell?.value === backup.command) {
-    return true;
-  }
   const managedShellIsActive = isLegacyMachineShellBackup(backup, registry)
     || (isWinlogonMachineShellBackup(backup)
       && registry.machineWinlogonShell?.value === backup.command);
@@ -521,28 +456,42 @@ export async function configureWindowsAutostart() {
 
 async function ensureExplorerShell() {
   let status = await requestWin32('explorer-shell-status');
-  if (!status?.taskbar) {
+  if (!status?.taskbar || !status?.desktop) {
     const started = await requestWin32('explorer-shell-start');
-    if (!started) throw new Error('Explorer did not restore its taskbar');
+    if (!started) throw new Error('Explorer did not start its shell windows');
     status = await requestWin32('explorer-shell-status');
   }
-  if (!status?.taskbar) throw new Error('Explorer taskbar is unavailable');
-  const restored = await requestWin32('taskbar-restore');
-  if (!restored) throw new Error('Windows taskbar could not be restored');
-  await restoreWindowsDesktopIcons();
-  await restoreWindowsDesktopWallpaper();
-  status = await requestWin32('explorer-shell-status');
-  if (!status?.taskbarVisible) {
-    throw new Error('Explorer taskbar is not visible after restoration');
+  if (!status?.taskbar || !status?.desktop) {
+    throw new Error('Explorer taskbar or desktop is unavailable');
   }
-  win32TaskbarHidden = false;
   global.topbarBroadcast?.();
   return true;
 }
 
+export async function ensureWindowsExplorerShell() {
+  if (process.platform !== 'win32') {
+    throw new Error('Explorer shell switching is only available on Windows');
+  }
+  return ensureExplorerShell();
+}
+
+export async function getWindowsExplorerTaskbarBounds() {
+  if (process.platform !== 'win32') {
+    throw new Error('Explorer taskbar geometry is only available on Windows');
+  }
+  const status = await requestWin32('explorer-shell-status');
+  const bounds = status?.taskbarBounds;
+  if (!bounds || !Number.isFinite(bounds.x) || !Number.isFinite(bounds.y)
+    || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)
+    || bounds.width <= 0 || bounds.height <= 0) {
+    throw new Error('Could not read the Windows taskbar bounds');
+  }
+  return bounds;
+}
+
 async function showWindowsShellError(reason, explorerRestored) {
   const detail = explorerRestored
-    ? 'Панель задач Explorer восстановлена.'
+    ? 'Explorer и его панель задач работают.'
     : 'Не удалось подтвердить восстановление панели. Запустите explorer.exe вручную через Диспетчер задач.';
   try {
     await dialog.showMessageBox({
@@ -559,7 +508,7 @@ async function showWindowsShellError(reason, explorerRestored) {
 
 export async function recoverWindowsShell(reason) {
   if (win32ShellRecovery) return win32ShellRecovery;
-  if (Date.now() < win32ShellFailureSuppressedUntil) return !win32TaskbarHidden;
+  if (Date.now() < win32ShellFailureSuppressedUntil) return true;
   win32ShellFailureSuppressedUntil = Date.now() + 10000;
   win32ShellRecovery = (async () => {
     let restored = false;

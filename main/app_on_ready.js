@@ -1,20 +1,32 @@
 import electronPkg from 'electron';
 const { app, dialog, session } = electronPkg;
-import { configureWindowsAutostart, restoreWindowsShellForAutostart } from './ipc_nativeWindows.js';
+import {
+  configureWindowsAutostart,
+  ensureWindowsExplorerShell,
+  restoreWindowsShellForAutostart,
+} from './ipc_nativeWindows.js';
 
 export default async function () {
   await app.whenReady();
   if (process.platform === 'win32') {
     try {
-      const persistentShellIsActive = await restoreWindowsShellForAutostart();
-      if (!persistentShellIsActive) {
-        await configureWindowsAutostart();
-      }
+      await restoreWindowsShellForAutostart();
+      await configureWindowsAutostart();
     } catch (error) {
-      console.error('[windows-startup] configuration failed:', error.message);
+      console.error('[windows-startup] shell/autostart configuration failed:', error.message);
       dialog.showErrorBox(
-        'Восстановление обычной оболочки Windows',
-        `Не удалось восстановить Explorer и обычную автозагрузку Omniscience.\n\n${error.message}`
+        'Настройка запуска Windows',
+        `Не удалось восстановить Explorer или настроить автозапуск Omniscience.\n\n${error.message}`
+      );
+    }
+
+    try {
+      await ensureWindowsExplorerShell();
+    } catch (error) {
+      console.error('[windows-startup] Explorer shell could not be started:', error.message);
+      dialog.showErrorBox(
+        'Не удалось запустить Explorer',
+        `Explorer должен оставаться запущенным вместе с Omniscience.\n\n${error.message}`
       );
     }
   }

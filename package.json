@@ -6,8 +6,9 @@
   "scripts": {
     "sync": "node fragmenter/index.js",
     "start": "npx electron .",
-    "windows:shell:install": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\\main\\manageWindowsShell.ps1 -Action Install",
-    "windows:shell:restore": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\\main\\manageWindowsShell.ps1 -Action Restore"
+    "windows:setup": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\\main\\manageWindowsAutostart.ps1 -Action Install",
+    "windows:setup:restore": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\\main\\manageWindowsAutostart.ps1 -Action Restore",
+    "windows:legacy-shell:restore": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\\main\\manageWindowsShell.ps1 -Action Restore"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

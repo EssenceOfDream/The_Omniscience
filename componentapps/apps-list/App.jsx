@@ -15,6 +15,7 @@ const KIND_COLOR = {
   webapp: '#2196f3',
   extension: '#4caf50',
   native: '#ff9800',
+  uwp: '#0078d4',
 };
 
 const FILTERS = [
@@ -23,6 +24,7 @@ const FILTERS = [
   { id: 'webapp', label: 'Webapps' },
   { id: 'extension', label: 'Расширения' },
   { id: 'native', label: 'Программы' },
+  { id: 'uwp', label: 'UWP' },
 ];
 
 const FILTER_COLOR = {
@@ -31,6 +33,7 @@ const FILTER_COLOR = {
   webapp: KIND_COLOR.webapp,
   extension: KIND_COLOR.extension,
   native: KIND_COLOR.native,
+  uwp: KIND_COLOR.uwp,
 };
 
 const PAGE_SIZE = 60;
@@ -151,7 +154,13 @@ export default function App({ desktopId }) {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return allApps.filter((app) => {
-      if (filter !== 'all' && app.kind !== filter) return false;
+      if (filter === 'uwp') {
+        if (app.launchType !== 'uwp') return false;
+      } else if (filter === 'native') {
+        if (app.kind !== 'native' || app.launchType === 'uwp') return false;
+      } else if (filter !== 'all' && app.kind !== filter) {
+        return false;
+      }
       if (!q) return true;
       return (
         app.title?.toLowerCase().includes(q) ||
@@ -227,6 +236,7 @@ export default function App({ desktopId }) {
       desktopApi?.send('launch-native-app', {
         exec: app.exec,
         terminal: app.terminal,
+        appUserModelId: app.appUserModelId,
       });
       return;
     }
@@ -402,7 +412,7 @@ export default function App({ desktopId }) {
                       }}
                     >
                       <Chip
-                        label={app.kind}
+                        label={app.launchType === 'uwp' ? 'UWP' : app.kind}
                         size="small"
                         sx={{
                           position: 'absolute',
@@ -412,7 +422,7 @@ export default function App({ desktopId }) {
                           height: 16,
                           fontSize: 9,
                           fontWeight: 600,
-                          bgcolor: KIND_COLOR[app.kind] || '#555',
+                          bgcolor: KIND_COLOR[app.launchType === 'uwp' ? 'uwp' : app.kind] || '#555',
                           color: '#fff',
                           zIndex: 2,
                           '& .MuiChip-label': { px: 0.7 },

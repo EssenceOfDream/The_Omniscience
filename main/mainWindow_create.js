@@ -191,12 +191,21 @@ export default async function () {
             if (desktopOrderTimer) clearTimeout(desktopOrderTimer);
         });
 
+        const syncMainWindowBounds = () => {
+            const bounds = screen.getPrimaryDisplay().bounds;
+            const current = global.mainWindow.getBounds();
+            if (current.x !== bounds.x || current.y !== bounds.y
+                || current.width !== bounds.width || current.height !== bounds.height) {
+                global.mainWindow.setBounds(bounds);
+            }
+        };
+
         // При смене метрик дисплея нужно только пере-применить bounds
         // штатными средствами Electron, без PS1.
-        const handleDisplayMetricsChanged = (_event, _display, changedMetrics) => {
-            if (changedMetrics.includes('bounds') || changedMetrics.includes('workArea')) {
-                const primary = screen.getPrimaryDisplay();
-                global.mainWindow.setBounds(primary.bounds);
+        const handleDisplayMetricsChanged = (_event, display, changedMetrics) => {
+            if (display.id === screen.getPrimaryDisplay().id
+                && changedMetrics.includes('bounds')) {
+                syncMainWindowBounds();
                 keepDesktopAtBottom();
             }
         };
@@ -207,6 +216,7 @@ export default async function () {
 
         global.mainWindow.once('ready-to-show', () => {
             if (global.mainWindow.isDestroyed()) return;
+            syncMainWindowBounds();
             // showInactive() специально НЕ фокусирует — было ошибкой.
             global.mainWindow.show();
             global.mainWindow.focus();

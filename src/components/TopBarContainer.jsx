@@ -10,6 +10,7 @@ export default function TopBarContainer() {
     showWindowList: true,
     showClock: true,
     showClockMs: false,
+    isWindowsPanel: new URLSearchParams(window.location.search).has('windows'),
     overviewOpen: false,
   });
 

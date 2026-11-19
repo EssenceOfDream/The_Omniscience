@@ -186,7 +186,7 @@ try {
 
         Write-Output "Omniscience is registered as the machine-wide Windows shell."
         Write-Output 'Sign out and sign in again to activate it.'
-        Write-Output "To undo: npm run windows:shell:restore (run as administrator)."
+        Write-Output "To restore the previous shell: npm run windows:legacy-shell:restore (run as administrator)."
     } else {
         if (-not (Test-Path -LiteralPath $backupPath)) {
             throw "No shell backup was found at $backupPath."

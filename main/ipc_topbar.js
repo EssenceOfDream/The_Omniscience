@@ -38,7 +38,7 @@ const execFileAsync = promisify(execFile);
 /* Topbar geometry                                                     */
 /* ------------------------------------------------------------------ */
 
-const TOPBAR_HEIGHT = 72;
+const TOPBAR_HEIGHT = process.platform === 'win32' ? 36 : 72;
 
 function enforceTopbarGeometry() {
   const w = global.topbarWindow;
@@ -176,11 +176,12 @@ function buildState() {
 
   return {
     windows, activeWindow, apps: cachedApps,
+    isWindowsPanel: process.platform === 'win32',
     overviewTabs: cfg.overviewTabs || [
       { id: 'apps-list', visible: true },
       { id: 'settings', visible: true },
     ],
-    showWindowList: cfg.showWindowList ?? true,
+    showWindowList: process.platform !== 'win32' && (cfg.showWindowList ?? true),
     showClock: cfg.showClock ?? true,
     showClockMs: cfg.showClockMs ?? false,
     overviewOpen: isOverviewOpen(),
@@ -189,9 +190,10 @@ function buildState() {
 
 export function broadcastTopbarState() {
   try {
-    const w = global.topbarWindow;
-    if (!w || w.isDestroyed()) return;
-    w.webContents.send('topbar:state-update', buildState());
+    const state = buildState();
+    for (const w of [global.topbarWindow, global.controlWindow]) {
+      if (w && !w.isDestroyed()) w.webContents.send('topbar:state-update', state);
+    }
   } catch { /* ignore */ }
 }
 
@@ -314,12 +316,18 @@ function openPowerMenu() {
 
   const display = screen.getPrimaryDisplay();
   const { x, y, width, height } = display.bounds;
-  const top = y + TOPBAR_HEIGHT;
+  const topbarBounds = global.topbarWindow && !global.topbarWindow.isDestroyed()
+    ? global.topbarWindow.getBounds()
+    : { y: y + TOPBAR_HEIGHT, height: 0 };
+  const top = process.platform === 'win32'
+    ? topbarBounds.y + topbarBounds.height
+    : y + TOPBAR_HEIGHT;
+  const menuHeight = Math.max(1, y + height - top);
   const win = new BrowserWindow({
     x,
     y: top,
     width,
-    height: Math.max(1, height - TOPBAR_HEIGHT),
+    height: menuHeight,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -490,7 +498,8 @@ export default function () {
   ipcMain.handle('topbar:get-state', () => buildState());
 
   ipcMain.on('shell-session:renderer-error', (event, payload) => {
-    if (event.sender !== global.topbarWindow?.webContents) return;
+    if (event.sender !== global.topbarWindow?.webContents
+      && event.sender !== global.controlWindow?.webContents) return;
     const message = String(payload?.message || 'TopBar renderer failed to render').slice(0, 2000);
     recoverWindowsShell(message).catch((error) => {
       console.error('[shell-session:renderer-error]', error.message);
@@ -622,15 +631,16 @@ export default function () {
    * Автотрансляция состояния при загрузке TopBar'а
    * ───────────────────────────────────────────────────────────── */
   function attachTopbarAutoBroadcast() {
-    const w = global.topbarWindow;
-    if (!w || w.isDestroyed()) {
+    const windows = [global.topbarWindow, global.controlWindow]
+      .filter((w) => w && !w.isDestroyed());
+    if (windows.length === 0) {
       setTimeout(attachTopbarAutoBroadcast, 100);
       return;
     }
-    w.webContents.on('did-finish-load', () => {
+    for (const w of windows) w.webContents.on('did-finish-load', () => {
       broadcastTopbarState();
     });
-    if (!w.webContents.isLoading()) {
+    if (windows.some((w) => !w.webContents.isLoading())) {
       broadcastTopbarState();
     }
   }

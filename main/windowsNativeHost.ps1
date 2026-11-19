@@ -521,10 +521,6 @@ while ($null -ne ($line = $reader.ReadLine())) {
                     [long]$request.hwnd, [int]$request.x, [int]$request.y,
                     [int]$request.width, [int]$request.height, [string]$request.edge)
             }
-            'panel-window-guard-start' {
-                [OmniWin32]::StartPanelWindowGuard([long[]]$request.excludedWindows)
-            }
-            'panel-window-guard-stop' { [OmniWin32]::StopPanelWindowGuard() }
             'dock-reset'  { [OmniWin32]::ResetDock([long]$request.hwnd) }
             'dock-remove' { [OmniWin32]::RemoveDock([long]$request.hwnd) }
             'cursor' { [OmniWin32]::SetCursor([int]$request.x, [int]$request.y) }
@@ -542,13 +538,7 @@ while ($null -ne ($line = $reader.ReadLine())) {
             'machine-shell-restore'    { Invoke-MachineShellPolicyAction $request }
             'machine-winlogon-restore' { Invoke-MachineWinlogonShellAction $request }
             'explorer-shell-status'    { [OmniWin32]::GetExplorerShellStatus() }
-            'explorer-shell-start'     { [OmniWin32]::StartExplorerShellVisible() }
-            'taskbar-hide'             { [OmniWin32]::HideExplorerTaskbar() }
-            'taskbar-restore'          { [OmniWin32]::RestoreExplorerTaskbar() }
-            'desktop-icons-hide'       { [OmniWin32]::HideExplorerDesktopIcons() }
-            'desktop-icons-restore'    { [OmniWin32]::RestoreExplorerDesktopIcons() }
-            'desktop-wallpaper-hide'   { [OmniWin32]::HideExplorerWallpaper() }
-            'desktop-wallpaper-restore'{ [OmniWin32]::RestoreExplorerWallpaper() }
+            'explorer-shell-start'     { [OmniWin32]::StartExplorerShell() }
             default { throw "Unsupported native action: $($request.action)" }
         }
         $response = @{ requestId = $request.requestId; success = $true; result = $result }
@@ -565,6 +555,3 @@ if ($PipeName) {
 }
 
 [OmniWin32]::ResetAllDockReservations() | Out-Null
-[OmniWin32]::RestoreExplorerTaskbar() | Out-Null
-[OmniWin32]::RestoreExplorerDesktopIcons() | Out-Null
-[OmniWin32]::RestoreExplorerWallpaper() | Out-Null

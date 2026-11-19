@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import TopBarContainer from './components/TopBarContainer';
+import ControlWindowContainer from './components/ControlWindowContainer';
 import ShellErrorBoundary from './components/ShellErrorBoundary';
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -32,12 +33,16 @@ document.addEventListener('DOMContentLoaded', () => {
     return;
   }
 
+  const content = new URLSearchParams(window.location.search).has('controls')
+    ? <ControlWindowContainer />
+    : <TopBarContainer />;
+
   createRoot(rootElement).render(
     <React.StrictMode>
       <ShellErrorBoundary>
         <ThemeProvider theme={darkTheme}>
           <CssBaseline />
-          <TopBarContainer />
+          {content}
         </ThemeProvider>
       </ShellErrorBoundary>
     </React.StrictMode>
