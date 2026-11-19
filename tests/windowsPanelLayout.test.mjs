@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getWindowsPanelLayout } from '../main/windowsPanelLayout.js';
 
-test('joins the Omniscience row to the right of top controls below the Windows taskbar', () => {
+test('places controls over the Windows taskbar and the Omniscience row below it', () => {
   const layout = getWindowsPanelLayout(
     { x: 20, y: 10, width: 1920, height: 1080 },
     { x: 20, y: 10, width: 1920, height: 40 },
@@ -12,7 +12,7 @@ test('joins the Omniscience row to the right of top controls below the Windows t
 
   assert.deepEqual(layout, {
     topbar: { x: 132, y: 50, width: 1808, height: 28 },
-    controls: { x: 20, y: 50, width: 112, height: 68 },
+    controls: { x: 20, y: 10, width: 112, height: 68 },
   });
 });
 
@@ -26,7 +26,7 @@ test('keeps the composite panel at the top even if Explorer is still at the bott
 
   assert.deepEqual(layout, {
     topbar: { x: 112, y: 40, width: 1808, height: 28 },
-    controls: { x: 0, y: 40, width: 112, height: 68 },
+    controls: { x: 0, y: 0, width: 112, height: 68 },
   });
 });
 

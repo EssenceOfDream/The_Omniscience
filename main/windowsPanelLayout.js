@@ -24,7 +24,7 @@ export function getWindowsPanelLayout(
     },
     controls: {
       x: displayBounds.x,
-      y: displayBounds.y + taskbarHeight,
+      y: displayBounds.y,
       width: Math.min(controlWidth, displayBounds.width),
       height: taskbarHeight + panelHeight,
     },

@@ -8,11 +8,19 @@ import { getWindowsPanelLayout } from './windowsPanelLayout.js';
 const TOPBAR_H = process.platform === 'win32' ? 28 : 72;
 const CONTROL_WINDOW_W = 112;
 
-function ensureControlWindowAboveTaskbar() {
+function ensureControlWindowAboveTaskbar(bounds) {
   const win = global.controlWindow;
   if (!win || win.isDestroyed()) return;
 
   try {
+    win.setBounds(bounds, false);
+    const actualBounds = win.getBounds();
+    if (actualBounds.x !== bounds.x || actualBounds.y !== bounds.y
+      || actualBounds.width !== bounds.width || actualBounds.height !== bounds.height) {
+      throw new Error(
+        `control window bounds did not apply (expected ${JSON.stringify(bounds)}, got ${JSON.stringify(actualBounds)})`,
+      );
+    }
     if (!win.isAlwaysOnTop()) win.setAlwaysOnTop(true, 'screen-saver');
     win.moveTop();
     if (!win.isAlwaysOnTop()) {
@@ -133,13 +141,16 @@ export default async function () {
     });
     global.controlWindow.once('ready-to-show', () => {
       if (global.controlWindow.isDestroyed()) return;
-      ensureControlWindowAboveTaskbar();
+      ensureControlWindowAboveTaskbar(layout.controls);
       global.controlWindow.showInactive();
-      ensureControlWindowAboveTaskbar();
+      ensureControlWindowAboveTaskbar(layout.controls);
     });
-    global.controlWindow.on('show', ensureControlWindowAboveTaskbar);
-    global.controlWindow.on('restore', ensureControlWindowAboveTaskbar);
-    const controlZOrderTimer = setInterval(ensureControlWindowAboveTaskbar, 1000);
+    global.controlWindow.on('show', () => ensureControlWindowAboveTaskbar(layout.controls));
+    global.controlWindow.on('restore', () => ensureControlWindowAboveTaskbar(layout.controls));
+    const controlZOrderTimer = setInterval(
+      () => ensureControlWindowAboveTaskbar(layout.controls),
+      1000,
+    );
     controlZOrderTimer.unref();
     global.controlWindow.once('closed', () => clearInterval(controlZOrderTimer));
   }
@@ -151,7 +162,7 @@ export default async function () {
       if (!global.topbarWindow.isDestroyed()) global.topbarWindow.setBounds(layout.topbar);
       if (global.controlWindow && !global.controlWindow.isDestroyed() && layout.controls) {
         global.controlWindow.setBounds(layout.controls);
-        ensureControlWindowAboveTaskbar();
+        ensureControlWindowAboveTaskbar(layout.controls);
       }
     }).catch((error) => {
       console.error('[topbar] failed to update shell panel bounds:', error.message);
