@@ -31,14 +31,12 @@ export default function ControlWindowContainer() {
       background: 'rgba(0,0,0,0.42)',
       backdropFilter: 'blur(8px)',
     }}>
-      <Box sx={{ transform: 'scale(0.58)', transformOrigin: 'center' }}>
-        <ControlGrid
-          activeWindow={activeWindow}
-          onOpenWindowSettings={(id) => {
-            window.electron_topbar_API?.send('topbar:open-window-settings', { id });
-          }}
-        />
-      </Box>
+      <ControlGrid
+        activeWindow={activeWindow}
+        onOpenWindowSettings={(id) => {
+          window.electron_topbar_API?.send('topbar:open-window-settings', { id });
+        }}
+      />
     </Box>
   );
 }

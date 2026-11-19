@@ -34,11 +34,12 @@ function Set-TaskbarTopAndAutoHide {
         }
 
         $settings[8] = [byte]0x01
-        $settings[12] = [byte]0x02
+        # StuckRects3 byte 12 controls auto-hide; 0x03 keeps the taskbar visible.
+        $settings[12] = [byte]0x03
         $key.SetValue('Settings', $settings, [Microsoft.Win32.RegistryValueKind]::Binary)
 
         $verified = $key.GetValue('Settings')
-        if ($verified -isnot [byte[]] -or $verified[8] -ne 0x01 -or $verified[12] -ne 0x02) {
+        if ($verified -isnot [byte[]] -or $verified[8] -ne 0x01 -or $verified[12] -ne 0x03) {
             throw 'Windows taskbar registry settings did not verify.'
         }
     } finally {
@@ -76,7 +77,7 @@ try {
         if ([string]$runKey.GetValue($runName) -cne $runCommand) {
             throw 'Omniscience autostart registration did not verify.'
         }
-        Write-Output 'Windows taskbar set to top with auto-hide enabled.'
+        Write-Output 'Windows taskbar set to top with auto-hide disabled.'
         Write-Output 'Omniscience registered for this user; the taskbar change takes effect at the next Windows sign-in.'
     } else {
         if (-not ($runKey.GetValueNames() -contains $runName)) { return }

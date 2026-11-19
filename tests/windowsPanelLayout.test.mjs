@@ -2,31 +2,31 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getWindowsPanelLayout } from '../main/windowsPanelLayout.js';
 
-test('places the Omniscience row below a top taskbar and overlays controls on it', () => {
+test('joins the Omniscience row to the right of top controls below the Windows taskbar', () => {
   const layout = getWindowsPanelLayout(
-    { x: 0, y: 0, width: 1920, height: 1080 },
-    { x: 0, y: -38, width: 1920, height: 40 },
-    36,
-    72,
+    { x: 20, y: 10, width: 1920, height: 1080 },
+    { x: 20, y: 10, width: 1920, height: 40 },
+    28,
+    112,
   );
 
   assert.deepEqual(layout, {
-    topbar: { x: 0, y: 40, width: 1920, height: 36 },
-    controls: { x: 0, y: 0, width: 72, height: 40 },
+    topbar: { x: 132, y: 50, width: 1808, height: 28 },
+    controls: { x: 20, y: 10, width: 112, height: 68 },
   });
 });
 
-test('keeps the taskbar overlay and Omniscience row paired when the taskbar is at the bottom', () => {
+test('keeps the composite panel at the top even if Explorer is still at the bottom', () => {
   const layout = getWindowsPanelLayout(
     { x: 0, y: 0, width: 1920, height: 1080 },
     { x: 0, y: 1040, width: 1920, height: 40 },
-    36,
-    72,
+    28,
+    112,
   );
 
   assert.deepEqual(layout, {
-    topbar: { x: 0, y: 1004, width: 1920, height: 36 },
-    controls: { x: 0, y: 1040, width: 72, height: 40 },
+    topbar: { x: 112, y: 40, width: 1808, height: 28 },
+    controls: { x: 0, y: 0, width: 112, height: 68 },
   });
 });
 
@@ -35,7 +35,7 @@ test('rejects invalid display and taskbar dimensions', () => {
     () => getWindowsPanelLayout(
       { x: 0, y: 0, width: 0, height: 1080 },
       { x: 0, y: 0, width: 1920, height: 40 },
-      36,
+      28,
       112,
     ),
     /Invalid display or taskbar bounds/,

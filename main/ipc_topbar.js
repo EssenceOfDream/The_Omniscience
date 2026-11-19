@@ -38,7 +38,7 @@ const execFileAsync = promisify(execFile);
 /* Topbar geometry                                                     */
 /* ------------------------------------------------------------------ */
 
-const TOPBAR_HEIGHT = process.platform === 'win32' ? 36 : 72;
+const TOPBAR_HEIGHT = process.platform === 'win32' ? 28 : 72;
 
 function enforceTopbarGeometry() {
   const w = global.topbarWindow;
