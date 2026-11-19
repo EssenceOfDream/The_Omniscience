@@ -1,3 +1,5 @@
+const CONTROL_WINDOW_BOTTOM_PADDING = 3;
+
 export function getWindowsPanelLayout(
   displayBounds, taskbarBounds, panelHeight, controlWidth,
 ) {
@@ -26,7 +28,7 @@ export function getWindowsPanelLayout(
       x: displayBounds.x,
       y: displayBounds.y,
       width: Math.min(controlWidth, displayBounds.width),
-      height: taskbarHeight + panelHeight,
+      height: taskbarHeight + panelHeight + CONTROL_WINDOW_BOTTOM_PADDING,
     },
   };
 }

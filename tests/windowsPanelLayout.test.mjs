@@ -12,7 +12,7 @@ test('places controls over the Windows taskbar and the Omniscience row below it'
 
   assert.deepEqual(layout, {
     topbar: { x: 132, y: 50, width: 1808, height: 28 },
-    controls: { x: 20, y: 10, width: 112, height: 68 },
+    controls: { x: 20, y: 10, width: 112, height: 71 },
   });
 });
 
@@ -26,7 +26,7 @@ test('keeps the composite panel at the top even if Explorer is still at the bott
 
   assert.deepEqual(layout, {
     topbar: { x: 112, y: 40, width: 1808, height: 28 },
-    controls: { x: 0, y: 0, width: 112, height: 68 },
+    controls: { x: 0, y: 0, width: 112, height: 71 },
   });
 });
 
