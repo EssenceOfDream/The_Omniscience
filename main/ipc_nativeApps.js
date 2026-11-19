@@ -192,6 +192,7 @@ async function collectShortcuts(dir, result, seen) {
       terminal: false,
       comment: '',
       categories: '',
+      fullPath
     });
   }
 }
@@ -257,6 +258,7 @@ async function scanDesktopFiles() {
         terminal: entry.Terminal === 'true',
         comment: entry.Comment || '',
         categories: entry.Categories || '',
+        fullPath:fileName
       });
     }
   }

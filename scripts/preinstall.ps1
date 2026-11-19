@@ -16,6 +16,10 @@ if (-not $isElevated) {
 
 Write-Host "Running with Administrator privileges." -ForegroundColor Green
 
+# --- Define paths globally ---
+$projectRoot = Split-Path $PSScriptRoot -Parent
+$bin = Join-Path $projectRoot "fragmenter/originals"
+
 # --- 2. Locate or Install Winget ---
 $aliasDir = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"
 $aliasExe = Join-Path $aliasDir "winget.exe"
@@ -34,8 +38,7 @@ function Test-WingetReady {
 }
 
 if (-not (Test-WingetReady)) {
-    Write-Host "Winget not ready. Installing from scripts/bin/..." -ForegroundColor Cyan
-    $bin = Join-Path $PSScriptRoot "fragmenter/originals"
+    Write-Host "Winget not ready. Installing from $bin..." -ForegroundColor Cyan
     $vclibs = Join-Path $bin "Microsoft.VCLibs.140.00_14.0.33519.0_x64.appx"
     $vclibsDesktop = Join-Path $bin "Microsoft.VCLibs.140.00.UWPDesktop_14.0.33728.0_x64.appx"
     $winAppRuntime = Join-Path $bin "Microsoft.WindowsAppRuntime.1.8_8000.616.304.0_x64.appx"
@@ -50,11 +53,9 @@ if (-not (Test-WingetReady)) {
         exit 1
     }
 
-    # Install the bundle with the exact local framework versions it requires.
     Write-Host "Installing DesktopAppInstaller (Winget) and its local frameworks..." -ForegroundColor Gray
     Add-AppxPackage -Path $wingetBundle -DependencyPath @($vclibs, $vclibsDesktop, $winAppRuntime) -ForceApplicationShutdown -ErrorAction Stop
 
-    # 2.3 Re-register manifest to force App Execution Alias creation
     $pkg = Get-AppxPackage -Name "Microsoft.DesktopAppInstaller"
     if ($pkg) {
         $manifest = Join-Path $pkg.InstallLocation "AppxManifest.xml"
@@ -63,7 +64,6 @@ if (-not (Test-WingetReady)) {
         }
     }
 
-    # 2.4 Wait for Windows to initialize winget.exe alias
     Write-Host "Waiting for winget.exe alias initialization..." -ForegroundColor Gray
     $retries = 10
     while (-not (Test-WingetReady) -and $retries -gt 0) {
@@ -117,7 +117,6 @@ if (!(Test-Path $pythonPath)) {
     if (Test-Path $userPython) { $pythonPath = $userPython }
 }
 
-$projectRoot = Split-Path $PSScriptRoot -Parent
 $npmrcPath = Join-Path $projectRoot ".npmrc"
 
 $npmrc = @"
@@ -126,5 +125,63 @@ msvs_version=2022
 "@
 Set-Content -Path $npmrcPath -Value $npmrc -Encoding ASCII
 Write-Host "Created $npmrcPath with Python path: $pythonPath" -ForegroundColor Green
+
+# --- 6. Install 7-max ---
+Write-Host "Installing 7-max via Winget..." -ForegroundColor Cyan
+& $aliasExe install --id IgorPavlov.7-max -e --source winget --silent --accept-package-agreements --accept-source-agreements
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "WARNING: 7-max installation failed or was skipped (exit code: $LASTEXITCODE)." -ForegroundColor Yellow
+} else {
+    Write-Host "7-max installed successfully." -ForegroundColor Green
+}
+
+# --- 7. Install Microsoft Store from local offline packages ---
+Write-Host "Installing Microsoft Store from local offline packages..." -ForegroundColor Cyan
+
+if (-not (Test-Path $bin)) {
+    Write-Host "ERROR: Directory '$bin' not found." -ForegroundColor Red
+    exit 1
+}
+
+# Ищем основной пакет Microsoft Store
+$storeBundle = Get-ChildItem -Path $bin -Filter "Microsoft.WindowsStore_*.msixbundle" | Select-Object -First 1
+
+if (-not $storeBundle) {
+    Write-Host "ERROR: Microsoft.WindowsStore msixbundle not found in $bin." -ForegroundColor Red
+    exit 1
+}
+
+# 7.1 Установка зависимостей
+Write-Host "Installing dependencies..." -ForegroundColor Gray
+$dependencies = Get-ChildItem -Path $bin -Filter "*.appx"
+foreach ($dep in $dependencies) {
+    Write-Host "  Installing: $($dep.Name)" -ForegroundColor DarkGray
+    try {
+        Add-AppxPackage -Path $dep.FullName -ErrorAction Stop
+    } catch {
+        Write-Host "    Warning: Failed to install $($dep.Name). It might already be installed. Error: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+# 7.2 Установка самого Microsoft Store
+Write-Host "Installing Microsoft Store bundle: $($storeBundle.Name)" -ForegroundColor Gray
+try {
+    Add-AppxPackage -Path $storeBundle.FullName -ErrorAction Stop
+    Write-Host "Microsoft Store installed successfully from offline files!" -ForegroundColor Green
+} catch {
+    Write-Host "ERROR: Failed to install Microsoft Store: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "You might need to check Windows Update or Group Policy settings." -ForegroundColor Yellow
+}
+
+# --- 8. Re-register Microsoft Store (Fixing ms-windows-store protocol) ---
+Write-Host "Re-registering Microsoft Store to fix protocols (bypassing missing explorer.exe)..." -ForegroundColor Cyan
+try {
+    # Эта команда заново прописывает все системные связи для Магазина
+    Get-AppXPackage *WindowsStore* -AllUsers | Foreach {Add-AppxPackage -DisableDevelopmentMode -Register "$($_.InstallLocation)\AppXManifest.xml" -ErrorAction Stop}
+    Write-Host "Re-registration successful." -ForegroundColor Green
+} catch {
+    Write-Host "WARNING: Re-registration encountered an issue: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "The Store might still work via direct COM activation." -ForegroundColor Gray
+}
 
 Write-Host "Preinstall setup complete." -ForegroundColor Green

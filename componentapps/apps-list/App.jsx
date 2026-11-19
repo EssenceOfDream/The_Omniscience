@@ -447,8 +447,24 @@ export default function App({ desktopId }) {
                             wordBreak: 'break-word',
                           }}
                         >
-                          {app.title || app.id}
+                          {app.title}
                         </Typography>
+                        {app.fullPath && (
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              color: 'white',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              wordBreak: 'break-word',
+                            }}
+                          >
+                            {app.fullPath}
+                          </Typography>
+                        )}
                       </CardActionArea>
                     </Card>
                   </Grid>
