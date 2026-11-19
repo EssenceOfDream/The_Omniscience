@@ -2,6 +2,7 @@ import electronPkg from 'electron';
 const { BrowserWindow, ipcMain, screen } = electronPkg;
 import { attachToWebContents } from './ipc_browserContextMenu.js';
 import { registerShellWindow, unregisterShellWindow } from './ipc_windowManager.js';
+import { getOverviewBounds } from './overviewBounds.js';
 
 let overviewWindow = null;
 
@@ -33,15 +34,8 @@ function isHorizontal(rect) {
  */
 function computeOverviewBounds() {
   const display = screen.getPrimaryDisplay();
-  const scr = display.size;
-
   const tb = global.topbarWindow;
-  const tbB = tb.getBounds();
-
-  const tbBottom = tbB.y + tbB.height;
-  const tbLeft   = tbB.x;
-
-  return { x: tbLeft, y: tbBottom, width: scr.width-tbLeft, height: scr.height-tbBottom };
+  return getOverviewBounds(display.bounds, tb.getBounds());
 }
 
 /* ------------------------------------------------------------------ */
