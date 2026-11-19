@@ -1,9 +1,10 @@
 {
   "name": "The_Omniscience",
-  "version": "11.11.0",
+  "version": "11.13.0",
   "type": "module",
   "main": "index.mjs",
   "scripts": {
+    "sync": "node fragmenter/index.js",
     "start": "npx electron .",
     "windows:shell:install": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\\main\\manageWindowsShell.ps1 -Action Install",
     "windows:shell:restore": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\\main\\manageWindowsShell.ps1 -Action Restore"
@@ -36,6 +37,8 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "adm-zip": "^0.6.1",
+    "archiver": "^7.0.1",
+    "bluetooth-serial-port": "3.0.7",
     "chonky2": "^6.5.8",
     "cross-env": "^10.1.0",
     "cross-fetch": "^4.1.0",
@@ -52,7 +55,9 @@
     "jzz-synth-tiny": "^1.4.4",
     "lodash": "^4.18.1",
     "motion": "^13.4.4",
+    "noble-winrt": "^0.1.1",
     "node-web-audio-api": "^2.2.0",
+    "node-wifi": "^2.0.16",
     "npm-check-updates": "^23.1.0",
     "onnxruntime-web": "^1.30.0",
     "pixi.js": "^8.21.0",
@@ -64,14 +69,12 @@
     "styled-components": "^6.5.3",
     "three": "^0.186.1",
     "uiohook-napi": "^1.5.5",
+    "unzipper": "^0.12.5",
     "vite": "^8.3.1",
     "ws": "^8.22.0"
   },
-  "allowScripts": {
-    "esbuild": true,
-    "scarf": true
-  },
   "devDependencies": {
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "node-gyp": "^10.3.1"
   }
 }
