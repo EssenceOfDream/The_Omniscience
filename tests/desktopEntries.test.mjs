@@ -1,6 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeDesktopEntries } from '../main/desktopEntries.js';
+import path from 'node:path';
+import { isWithinDesktopTree, mergeDesktopEntries } from '../main/desktopEntries.js';
+
+test('recognizes descendants of a configured Windows desktop folder only', () => {
+  const roots = {
+    configuredDesktop: 'D:\\Users\\User\\My Desktop',
+  };
+
+  assert.equal(
+    isWithinDesktopTree('D:\\Users\\User\\My Desktop\\Projects', roots, path.win32),
+    true,
+  );
+  assert.equal(
+    isWithinDesktopTree('D:\\Users\\User\\My Desktop-old\\Projects', roots, path.win32),
+    false,
+  );
+});
 
 const entry = (name) => ({ name });
 

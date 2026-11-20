@@ -1,7 +1,12 @@
 import electronPkg from 'electron';
 const { BrowserWindow, ipcMain, screen } = electronPkg;
 import { attachToWebContents } from './ipc_browserContextMenu.js';
-import { registerShellWindow, unregisterShellWindow } from './ipc_windowManager.js';
+import {
+  getWindowById,
+  registerShellWindow,
+  unregisterShellWindow,
+} from './ipc_windowManager.js';
+import { destroyViewsForParentWindowInstance } from './ipc_viewManager.js';
 import { getOverviewBounds } from './overviewBounds.js';
 
 let overviewWindow = null;
@@ -14,33 +19,14 @@ export function isOverviewOpen() {
 /* Вычисление точных границ Overview                                   */
 /* ------------------------------------------------------------------ */
 
-const EDGE_EPS = 4;   // допуск на нечётные пиксели
-
-function isHorizontal(rect) {
-  return rect.width > rect.height;
-}
-
-/**
- * Считаем область Overview напрямую:
- *   display.bounds − topbarWindow.getBounds()
- * Все координаты в DIP, одинаковой системе что и getBounds().
- *
- * Логика:
- *   1) Если topbar-окна нет — отдаём display.bounds.
- *   2) Определяем, к какой стороне экрана прижат topbar.
- *   3) Отрезаем от bounds соответствующую полосу.
- *   4) Если topbar не прижат ни к одной стороне — отдаём display.bounds
- *      (поведение по умолчанию: полностью перекрыть экран).
- */
 function computeOverviewBounds() {
   const display = screen.getPrimaryDisplay();
-  const tb = global.topbarWindow;
-  return getOverviewBounds(display.bounds, tb.getBounds());
+  const topbar = global.topbarWindow;
+  const topbarBounds = topbar && !topbar.isDestroyed()
+    ? topbar.getBounds()
+    : { y: display.bounds.y, height: 0 };
+  return getOverviewBounds(display.bounds, topbarBounds);
 }
-
-/* ------------------------------------------------------------------ */
-/* Открытие / закрытие                                                 */
-/* ------------------------------------------------------------------ */
 
 export function openOverview() {
   if (isOverviewOpen()) {
@@ -76,44 +62,50 @@ export function openOverview() {
     },
   });
 
-  try { win.setAlwaysOnTop(true, 'screen-saver'); } catch { /* ignore */ }
-  try { win.setFullScreenable(false); } catch { /* ignore */ }
-
-  try { attachToWebContents(win.webContents); } catch { /* ignore */ }
-
-  win.loadURL(global.paths.overviewIndex);
-
-  try { registerShellWindow(win, '__overview__', { title: 'Overview' }); }
-  catch (e) { console.error('[overview] registerShellWindow:', e?.message || e); }
+  const windowRegistryId = `__overview__:${win.id}`;
+  const overviewUrl = new URL(global.paths.overviewIndex);
+  overviewUrl.searchParams.set('overviewInstance', windowRegistryId);
+  try { win.setAlwaysOnTop(true, 'screen-saver'); } catch (error) {
+    console.error('[overview] failed to set overlay order:', error.message);
+  }
+  try { win.setFullScreenable(false); } catch (error) {
+    console.error('[overview] failed to disable fullscreen:', error.message);
+  }
+  try { attachToWebContents(win.webContents); } catch (error) {
+    console.error('[overview] failed to attach context menu:', error.message);
+  }
+  if (!registerShellWindow(win, windowRegistryId, { title: 'Overview' })) {
+    console.error('[overview] failed to register window');
+  }
+  win.loadURL(overviewUrl.href).catch((error) => {
+    console.error('[overview] failed to load window:', error.message);
+    if (!win.isDestroyed()) win.close();
+  });
 
   win.once('ready-to-show', () => {
     if (win.isDestroyed()) return;
     // Пересчитываем ещё раз — вдруг TopBar уже подвинулся
-    const b2 = computeOverviewBounds();
-    try { win.setBounds(b2); } catch { /* ignore */ }
+    win.setBounds(computeOverviewBounds());
     win.show();
     try { win.focus(); } catch { /* ignore */ }
-    try { win.webContents.send('overview:opened'); } catch { /* ignore */ }
     global.topbarBroadcast?.();
   });
 
   win.on('closed', () => {
-    try { unregisterShellWindow('__overview__'); } catch { /* ignore */ }
-    overviewWindow = null;
+    destroyViewsForParentWindowInstance(win);
+    if (getWindowById(windowRegistryId) === win) unregisterShellWindow(windowRegistryId);
+    if (overviewWindow === win) overviewWindow = null;
     global.topbarBroadcast?.();
   });
 
-  // Если WM всё же попытается сдвинуть/изменить окно — возвращаем на место.
   win.on('resize', () => {
     if (win.isDestroyed()) return;
-    try {
-      const want = computeOverviewBounds();
-      const cur = win.getBounds();
-      if (cur.x !== want.x || cur.y !== want.y ||
-          cur.width !== want.width || cur.height !== want.height) {
-        win.setBounds(want);
-      }
-    } catch { /* ignore */ }
+    const bounds = computeOverviewBounds();
+    const currentBounds = win.getBounds();
+    if (currentBounds.x !== bounds.x || currentBounds.y !== bounds.y
+      || currentBounds.width !== bounds.width || currentBounds.height !== bounds.height) {
+      win.setBounds(bounds);
+    }
   });
 
   overviewWindow = win;
@@ -122,7 +114,8 @@ export function openOverview() {
 
 export function closeOverview() {
   if (!isOverviewOpen()) return;
-  try { overviewWindow.close(); } catch { /* ignore */ }
+  destroyViewsForParentWindowInstance(overviewWindow);
+  overviewWindow.close();
   overviewWindow = null;
 }
 

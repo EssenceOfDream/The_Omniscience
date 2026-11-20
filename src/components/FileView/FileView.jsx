@@ -233,7 +233,7 @@ function FileViewInner({ basePath }) {
     /* --- Единственная подписка на директорию --- */
     const {
         files, directoryMetadata, loading, error, reload,
-    } = useDirectory(currentPath);
+    } = useDirectory(currentPath, basePath);
 
     /* --- Радиус --- */
     const initialRadius = (() => {

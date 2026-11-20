@@ -2,30 +2,26 @@ import electronPkg from 'electron';
 const { WebContentsView, ipcMain } = electronPkg;
 import { attachToWebContents } from './ipc_browserContextMenu.js';
 import { getWindowById } from './ipc_windowManager.js';
+import {
+    getViewIdsForParentWindowInstance,
+    getOverviewSiblingViewIds,
+    resolveViewParent,
+} from './viewLifecycle.js';
 
 /* ------------------------------------------------------------------ */
 /* Резолвер родительского окна                                         */
 /* ------------------------------------------------------------------ */
 
 /**
- * Возвращает BrowserWindow по символическому parentWindowId:
- *   null / undefined  → mainWindow
- *   'main'            → mainWindow
- *   'topbar'          → topbarWindow
- *   любое другое      → ищем в реестре ipc_windowManager (обычные окна + shell)
- *                       с фолбэком на mainWindow
+ * Resolves known parent windows. An invalid explicit parent must not silently
+ * attach its view to the main window.
  */
 function resolveParentWindow(parentWindowId) {
-    if (!parentWindowId) return global.mainWindow || null;
-    if (parentWindowId === 'main') return global.mainWindow || null;
-    if (parentWindowId === 'topbar') return global.topbarWindow || null;
-
-    try {
-        const w = getWindowById(parentWindowId);
-        if (w && !w.isDestroyed()) return w;
-    } catch { /* ignore */ }
-
-    return global.mainWindow || null;
+    return resolveViewParent(parentWindowId, {
+        mainWindow: global.mainWindow,
+        topbarWindow: global.topbarWindow,
+        getWindowById,
+    });
 }
 
 /* ------------------------------------------------------------------ */
@@ -78,10 +74,29 @@ function hookParentCleanup(parentWindow) {
 /* Публичное API                                                       */
 /* ------------------------------------------------------------------ */
 
-export function createView(id, { kind, url, preload, bounds, parentWindowId }) {
+export function createView(id, {
+    kind,
+    role,
+    lifecycleToken,
+    url,
+    preload,
+    bounds,
+    parentWindowId,
+}) {
     const parentWindow = resolveParentWindow(parentWindowId);
     if (!parentWindow || parentWindow.isDestroyed()) return null;
-    if (global.views[id]) return global.views[id].view;
+
+    if (role === 'overview-tab') {
+        const siblingIds = getOverviewSiblingViewIds(global.views, parentWindow, id);
+        for (const siblingId of siblingIds) destroyView(siblingId);
+    }
+
+    if (global.views[id]) {
+        const existing = global.views[id];
+        if (existing.parentWindow === parentWindow
+            && existing.lifecycleToken === lifecycleToken) return existing.view;
+        destroyView(id);
+    }
 
     const view = new WebContentsView({
         webPreferences: {
@@ -103,7 +118,9 @@ export function createView(id, { kind, url, preload, bounds, parentWindowId }) {
     const entry = {
         view,
         parentWindow,
-        parentWindowId: parentWindowId || null,   // ← сохраняем для recreateAllViews
+        parentWindowId: parentWindowId || null,
+        role: role || null,
+        lifecycleToken: lifecycleToken || null,
         bounds: { ...b },
         zIndex: 0,
         kind: kind || 'window',
@@ -166,9 +183,10 @@ export function createView(id, { kind, url, preload, bounds, parentWindowId }) {
     return view;
 }
 
-export function updateBounds(id, bounds) {
+export function updateBounds(id, bounds, lifecycleToken = null) {
     const entry = global.views[id];
     if (!entry) return;
+    if (lifecycleToken && entry.lifecycleToken !== lifecycleToken) return;
 
     const next = {
         x: Math.round(bounds.x),
@@ -186,12 +204,19 @@ export function updateBounds(id, bounds) {
     }
 }
 
-export function destroyView(id) {
+export function destroyView(id, lifecycleToken = null) {
     const entry = global.views[id];
     if (!entry) return;
+    if (lifecycleToken && entry.lifecycleToken !== lifecycleToken) return;
     try { entry.parentWindow?.contentView?.removeChildView(entry.view); } catch (_) { }
     try { entry.view.webContents.destroy(); } catch (_) { }
     delete global.views[id];
+}
+
+export function destroyViewsForParentWindowInstance(parentWindow) {
+    for (const id of getViewIdsForParentWindowInstance(global.views, parentWindow)) {
+        destroyView(id);
+    }
 }
 
 export function setZIndex(id, z) {
@@ -219,6 +244,8 @@ export function recreateAllViews() {
         requestedPreload: e.requestedPreload,
         zIndex: e.zIndex, scale: e.scale,
         parentWindowId: e.parentWindowId || null,   // ← переносим
+        role: e.role,
+        lifecycleToken: e.lifecycleToken,
     }));
 
     if (snapshot.length === 0) return;
@@ -230,10 +257,12 @@ export function recreateAllViews() {
         if (s.kind !== 'window') continue;
         createView(s.id, {
             kind: 'window',
+            role: s.role,
+            lifecycleToken: s.lifecycleToken,
             url: s.url,
             preload: s.requestedPreload,
             bounds: s.bounds,
-            parentWindowId: s.parentWindowId,       // ← восстанавливаем
+            parentWindowId: s.parentWindowId,
         });
         const e = global.views[s.id];
         if (!e) continue;
@@ -265,8 +294,8 @@ export default function () {
         createView(msg.id, msg);
     });
 
-    ipcMain.on('view:update-bounds', (_e, { id, bounds }) => {
-        updateBounds(id, bounds);
+    ipcMain.on('view:update-bounds', (_e, { id, bounds, lifecycleToken }) => {
+        updateBounds(id, bounds, lifecycleToken);
     });
 
     ipcMain.on('view:update-own-bounds', (event, { bounds }) => {
@@ -275,8 +304,8 @@ export default function () {
         updateBounds(id, bounds);
     });
 
-    ipcMain.on('view:destroy', (_e, { id }) => {
-        destroyView(id);
+    ipcMain.on('view:destroy', (_e, { id, lifecycleToken }) => {
+        destroyView(id, lifecycleToken);
     });
 
     ipcMain.on('view:set-z', (_e, { id, z }) => {

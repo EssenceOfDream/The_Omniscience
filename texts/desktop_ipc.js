@@ -45,7 +45,7 @@
 				getProjectRoot: () => ipcRenderer.invoke('get-project-root'),
 				// Файловая система (FileView)
 				getUserDirs: () => ipcRenderer.invoke('fs:get-user-dirs'),
-				readDir: (path) => ipcRenderer.invoke('fs:read-dir', { path }),
+				readDir: (path, desktopRoot) => ipcRenderer.invoke('fs:read-dir', { path, desktopRoot }),
 				getFileInfo: (path) => ipcRenderer.invoke('fs:get-info', { path }),
 				getFileIcon: (path) => ipcRenderer.invoke('fs:get-icon', { path }),
 				openPath: (path) => ipcRenderer.invoke('fs:open', { path }),

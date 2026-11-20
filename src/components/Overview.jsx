@@ -1,75 +1,101 @@
-import React, { useMemo, useRef } from 'react';
-import { Box, Tabs, Tab, IconButton, Paper } from '@mui/material';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Box, IconButton, Paper, Tab, Tabs, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import useTabContentView from '../hooks/useTabContentView';
+import { getOverviewViewId } from './overviewViewId.js';
 
-function AppTabContent({ app, viewId, tabId, parentWindowId }) {
+function resolveVisibleTabs(apps, tabsConfig) {
+  const appsById = new Map(apps.map((app) => [app.id, app]));
+  return tabsConfig
+    .filter((tab) => tab.visible)
+    .map((tab) => {
+      const app = appsById.get(tab.id);
+      return app ? { id: tab.id, app, label: app.title || tab.id } : null;
+    })
+    .filter(Boolean);
+}
+
+function TabContent({ app, viewId, tabId, parentWindowId }) {
   const containerRef = useRef(null);
   useTabContentView(viewId, app, containerRef, { tabId, parentWindowId });
   return <Box ref={containerRef} sx={{ width: '100%', height: '100%' }} />;
 }
 
 export default function Overview({
-  activeTabId,
-  onTabChange,
+  apps,
+  tabsConfig,
+  error,
   onClose,
-  apps = [],
-  tabsConfig = [],
-  parentWindowId = null,
+  parentWindowId,
 }) {
-  const tabs = useMemo(() => {
-    return tabsConfig
-      .filter((e) => e.visible)
-      .map((e) => {
-        const app = apps.find((a) => a.id === e.id);
-        if (!app) return null;
-        return { id: e.id, label: app.title || e.id, app };
-      })
-      .filter(Boolean);
-  }, [tabsConfig, apps]);
+  const tabs = useMemo(
+    () => resolveVisibleTabs(apps, tabsConfig),
+    [apps, tabsConfig],
+  );
+  const [selectedTabId, setSelectedTabId] = useState(null);
+  const selectedTab = tabs.find((tab) => tab.id === selectedTabId) || tabs[0] || null;
 
-  const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
+  useEffect(() => {
+    if (tabs.length > 0 && !tabs.some((tab) => tab.id === selectedTabId)) {
+      setSelectedTabId(tabs[0].id);
+    }
+  }, [tabs, selectedTabId]);
+
+  const viewId = selectedTab
+    ? getOverviewViewId(parentWindowId, selectedTab.id)
+    : null;
 
   return (
-    <Box
-      onClick={(e) => e.stopPropagation()}
-      sx={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}
-    >
+    <Box sx={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}>
       <Paper
         elevation={0}
         sx={{
-          bgcolor: 'transparent', borderRadius: 0, p: 1,
+          bgcolor: 'transparent',
+          borderRadius: 0,
+          p: 1,
           borderBottom: '1px solid rgba(255,255,255,0.12)',
           flexShrink: 0,
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <Tabs
-            value={activeTab?.id || false}
-            onChange={(_, v) => onTabChange(v)}
+            value={selectedTab?.id || false}
+            onChange={(_event, tabId) => setSelectedTabId(tabId)}
             textColor="inherit"
             variant="scrollable"
           >
-            {tabs.map((t) => (
-              <Tab key={t.id} value={t.id} label={t.label}
-                sx={{ color: 'rgba(255,255,255,0.7)', '&.Mui-selected': { color: '#fff' } }} />
+            {tabs.map((tab) => (
+              <Tab
+                key={tab.id}
+                value={tab.id}
+                label={tab.label}
+                sx={{ color: 'rgba(255,255,255,0.7)', '&.Mui-selected': { color: '#fff' } }}
+              />
             ))}
           </Tabs>
-          <IconButton onClick={onClose} sx={{ color: 'white' }}>
+          <IconButton onClick={onClose} sx={{ color: 'white' }} aria-label="Закрыть">
             <CloseIcon />
           </IconButton>
         </Box>
       </Paper>
 
       <Box sx={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        {activeTab && (
-          <AppTabContent
-            key={activeTab.id}
-            app={activeTab.app}
-            viewId={`overview:${activeTab.id}`}
-            tabId={activeTab.id}
+        {error ? (
+          <Typography role="alert" sx={{ p: 3, color: '#f88', textAlign: 'center' }}>
+            {error}
+          </Typography>
+        ) : selectedTab && viewId && parentWindowId ? (
+          <TabContent
+            key={viewId}
+            app={selectedTab.app}
+            viewId={viewId}
+            tabId={selectedTab.id}
             parentWindowId={parentWindowId}
           />
+        ) : (
+          <Typography sx={{ p: 3, color: 'rgba(255,255,255,0.6)', textAlign: 'center' }}>
+            Нет доступных вкладок
+          </Typography>
         )}
       </Box>
     </Box>

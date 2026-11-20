@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
-export default function useDirectory(path) {
+export default function useDirectory(path, desktopRoot) {
   const [files, setFiles] = useState([]);
   const [directoryMetadata, setDirectoryMetadata] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -22,7 +22,7 @@ export default function useDirectory(path) {
 
     try {
       const api = window.electron_desktop_API;
-      const res = await api.readDir(targetPath);
+      const res = await api.readDir(targetPath, desktopRoot);
       if (reqId !== requestIdRef.current) return;
 
       if (!res.success) {
@@ -49,7 +49,7 @@ export default function useDirectory(path) {
     } finally {
       if (reqId === requestIdRef.current) setLoading(false);
     }
-  }, []);
+  }, [desktopRoot]);
 
   // Первичная загрузка + подписка на fs.watch через main
   useEffect(() => {

@@ -5,6 +5,7 @@ import {
   Button,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
+import { filterApps, groupAppsByFirstLetter } from './searchApps.js';
 
 /* ------------------------------------------------------------------ */
 /* Константы                                                           */
@@ -46,13 +47,6 @@ function inferKind(app) {
   if (app.type === 'browser') return 'webapp';
   if (app.type) return app.type;
   return 'componentapp';
-}
-
-function getFirstLetter(title) {
-  if (!title) return '#';
-  const ch = title.trim().charAt(0).toUpperCase();
-  if (/[A-ZА-ЯЁ]/.test(ch)) return ch;
-  return '#';
 }
 
 function getNewWindowId() {
@@ -151,23 +145,10 @@ export default function App({ desktopId }) {
   }, [baseApps, nativeApps, extensions]);
 
   /* -------- Фильтрация по типу + поиску -------- */
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return allApps.filter((app) => {
-      if (filter === 'uwp') {
-        if (app.launchType !== 'uwp') return false;
-      } else if (filter === 'native') {
-        if (app.kind !== 'native' || app.launchType === 'uwp') return false;
-      } else if (filter !== 'all' && app.kind !== filter) {
-        return false;
-      }
-      if (!q) return true;
-      return (
-        app.title?.toLowerCase().includes(q) ||
-        app.id?.toLowerCase().includes(q)
-      );
-    });
-  }, [allApps, search, filter]);
+  const filtered = useMemo(
+    () => filterApps(allApps, filter, search),
+    [allApps, search, filter],
+  );
 
   /* -------- Сброс счётчика при смене фильтра/поиска -------- */
   useEffect(() => {
@@ -179,6 +160,10 @@ export default function App({ desktopId }) {
   const pageItems = useMemo(
     () => filtered.slice(0, visibleCount),
     [filtered, visibleCount]
+  );
+  const groups = useMemo(
+    () => groupAppsByFirstLetter(pageItems),
+    [pageItems],
   );
 
   const hasMore = visibleCount < filtered.length;
@@ -358,93 +343,95 @@ export default function App({ desktopId }) {
           </Typography>
         )}
 
-        {(() => {
-          const groups = [];
-          let current = null;
-          pageItems.forEach((app) => {
-            const title = app.title || app.id || '';
-            const letter = getFirstLetter(title);
-            if (!current || current.letter !== letter) {
-              current = { letter, items: [] };
-              groups.push(current);
-            }
-            current.items.push(app);
-          });
-
-          return groups.map((group) => (
-            <Box key={group.letter}>
-              <Divider
-                textAlign="left"
+        {groups.map((group) => (
+          <Box key={group.letter}>
+            <Divider
+              textAlign="left"
+              sx={{
+                mb: 2,
+                mt: 1,
+                '&::before': { borderColor: 'rgba(255,255,255,0.15)' },
+                '&::after': { borderColor: 'rgba(255,255,255,0.15)' },
+              }}
+            >
+              <Typography
                 sx={{
-                  mb: 2,
-                  mt: 1,
-                  '&::before': { borderColor: 'rgba(255,255,255,0.15)' },
-                  '&::after': { borderColor: 'rgba(255,255,255,0.15)' },
+                  color: '#a855f7',
+                  fontWeight: 700,
+                  fontSize: 14,
+                  letterSpacing: '2px',
+                  px: 1,
                 }}
               >
-                <Typography
-                  sx={{
-                    color: '#a855f7',
-                    fontWeight: 700,
-                    fontSize: 14,
-                    letterSpacing: '2px',
-                    px: 1,
-                  }}
-                >
-                  {group.letter}
-                </Typography>
-              </Divider>
+                {group.letter}
+              </Typography>
+            </Divider>
 
-              <Grid container spacing={2}>
-                {group.items.map((app) => (
-                  <Grid item xs={6} sm={4} md={3} lg={2} key={app.uid}>
-                    <Card
+            <Grid container spacing={2}>
+              {group.items.map((app) => (
+                <Grid item xs={6} sm={4} md={3} lg={2} key={app.uid}>
+                  <Card
+                    sx={{
+                      bgcolor: 'rgba(255,255,255,0.05)',
+                      borderRadius: 2,
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      transition: '0.2s',
+                      position: 'relative',
+                      '&:hover': {
+                        bgcolor: 'rgba(255,255,255,0.1)',
+                        transform: 'scale(1.02)',
+                      },
+                    }}
+                  >
+                    <Chip
+                      label={app.launchType === 'uwp' ? 'UWP' : app.kind}
+                      size="small"
                       sx={{
-                        bgcolor: 'rgba(255,255,255,0.05)',
-                        borderRadius: 2,
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        transition: '0.2s',
-                        position: 'relative',
-                        '&:hover': {
-                          bgcolor: 'rgba(255,255,255,0.1)',
-                          transform: 'scale(1.02)',
-                        },
+                        position: 'absolute',
+                        top: 4,
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        height: 16,
+                        fontSize: 9,
+                        fontWeight: 600,
+                        bgcolor: KIND_COLOR[app.launchType === 'uwp' ? 'uwp' : app.kind] || '#555',
+                        color: '#fff',
+                        zIndex: 2,
+                        '& .MuiChip-label': { px: 0.7 },
                       }}
-                    >
-                      <Chip
-                        label={app.launchType === 'uwp' ? 'UWP' : app.kind}
-                        size="small"
-                        sx={{
-                          position: 'absolute',
-                          top: 4,
-                          left: '50%',
-                          transform: 'translateX(-50%)',
-                          height: 16,
-                          fontSize: 9,
-                          fontWeight: 600,
-                          bgcolor: KIND_COLOR[app.launchType === 'uwp' ? 'uwp' : app.kind] || '#555',
-                          color: '#fff',
-                          zIndex: 2,
-                          '& .MuiChip-label': { px: 0.7 },
-                        }}
-                        className="ignore_The_Omniscience_Theme_recursive"
-                      />
+                      className="ignore_The_Omniscience_Theme_recursive"
+                    />
 
-                      <CardActionArea
-                        onClick={() => handleClick(app)}
-                        sx={{ p: 2, pt: 3, textAlign: 'center' }}
+                    <CardActionArea
+                      onClick={() => handleClick(app)}
+                      sx={{ p: 2, pt: 3, textAlign: 'center' }}
+                    >
+                      {app.icon ? (
+                        <img
+                          src={app.icon}
+                          width="48"
+                          height="48"
+                          alt="icon"
+                          style={{ display: 'block', margin: '0 auto 8px', objectFit: 'contain' }}
+                        />
+                      ) : (
+                        <Box sx={{ fontSize: 40, mb: 1 }}>📦</Box>
+                      )}
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: 'white',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          wordBreak: 'break-word',
+                        }}
                       >
-                        {app.icon ? (
-                          <img
-                            src={app.icon}
-                            width="48"
-                            height="48"
-                            alt="icon"
-                            style={{ display: 'block', margin: '0 auto 8px', objectFit: 'contain' }}
-                          />
-                        ) : (
-                          <Box sx={{ fontSize: 40, mb: 1 }}>📦</Box>
-                        )}
+                        {app.title}
+                      </Typography>
+                      {app.fullPath && (
                         <Typography
                           variant="body2"
                           sx={{
@@ -457,32 +444,16 @@ export default function App({ desktopId }) {
                             wordBreak: 'break-word',
                           }}
                         >
-                          {app.title}
+                          {app.fullPath}
                         </Typography>
-                        {app.fullPath && (
-                          <Typography
-                            variant="body2"
-                            sx={{
-                              color: 'white',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              display: '-webkit-box',
-                              WebkitLineClamp: 2,
-                              WebkitBoxOrient: 'vertical',
-                              wordBreak: 'break-word',
-                            }}
-                          >
-                            {app.fullPath}
-                          </Typography>
-                        )}
-                      </CardActionArea>
-                    </Card>
-                  </Grid>
-                ))}
-              </Grid>
-            </Box>
-          ));
-        })()}
+                      )}
+                    </CardActionArea>
+                  </Card>
+                </Grid>
+              ))}
+            </Grid>
+          </Box>
+        ))}
 
         {hasMore && (
           <Box

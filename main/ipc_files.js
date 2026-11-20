@@ -12,7 +12,7 @@ import { pathToFileURL, fileURLToPath } from 'url';
 import path from 'path';
 import os from 'os';
 import { decodeDesktopIni, parseDesktopIni } from './desktopIni.js';
-import { mergeDesktopEntries } from './desktopEntries.js';
+import { isWithinDesktopTree, mergeDesktopEntries } from './desktopEntries.js';
 
 const execFileAsync = promisify(execFile);
 const yieldToEventLoop = () => new Promise((r) => setImmediate(r));
@@ -150,19 +150,6 @@ async function getWindowsDesktopPaths() {
     }
 }
 
-function isWithinDesktopTree(targetPath, desktopRoots) {
-    if (!desktopRoots) return false;
-    return [desktopRoots.userDesktop, desktopRoots.publicDesktop]
-        .filter(Boolean)
-        .some((rootPath) => {
-            const relativePath = path.relative(rootPath, targetPath);
-            return relativePath === ''
-                || (relativePath !== '..'
-                    && !relativePath.startsWith(`..${path.sep}`)
-                    && !path.isAbsolute(relativePath));
-        });
-}
-
 async function readDesktopIniMetadata(dirPath) {
     try {
         const iniPath = path.join(dirPath, 'desktop.ini');
@@ -187,12 +174,19 @@ async function readDesktopIniMetadata(dirPath) {
     }
 }
 
-async function readDir(dirPath) {
+async function readDir(dirPath, configuredDesktopPath = null) {
     try {
-        const desktopRoots = await getWindowsDesktopPaths();
+        const desktopRoots = await getWindowsDesktopPaths() || {};
         const targetPath = await realpath(dirPath);
+        if (configuredDesktopPath) {
+            try {
+                desktopRoots.configuredDesktop = await realpath(configuredDesktopPath);
+            } catch (error) {
+                if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+            }
+        }
         const isDesktopTree = isWithinDesktopTree(targetPath, desktopRoots);
-        const isUserDesktopRoot = !!desktopRoots
+        const isUserDesktopRoot = !!desktopRoots.userDesktop
             && path.relative(desktopRoots.userDesktop, targetPath) === '';
         const entries = await readdir(targetPath, { withFileTypes: true });
         let directoryEntries = entries.map((entry) => ({ entry, directory: targetPath }));
@@ -1406,7 +1400,7 @@ ipcMain.on('fs:disable-keyboard-capture', (event) => {
 
 export default function () {
     ipcMain.handle('fs:get-user-dirs', () => getUserDirs());
-    ipcMain.handle('fs:read-dir', (_e, { path: p }) => readDir(p));
+    ipcMain.handle('fs:read-dir', (_e, { path: p, desktopRoot }) => readDir(p, desktopRoot));
     ipcMain.handle('fs:get-info', (_e, { path: p }) => getFileInfo(p));
     ipcMain.handle('fs:get-icon', (_e, { path: p }) => getFileIcon(p));
 
