@@ -135,7 +135,40 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "7-max installed successfully." -ForegroundColor Green
 }
 
-# --- 7. Install Microsoft Store from local offline packages ---
+# --- 7. Install useful Windows utilities ---
+function Install-OptionalWingetPackage {
+    param(
+        [Parameter(Mandatory = $true)][string]$Id,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    Write-Host "Installing $Name via Winget..." -ForegroundColor Cyan
+    & $aliasExe install --id $Id -e --source winget --silent --accept-package-agreements --accept-source-agreements
+    $exitCode = $LASTEXITCODE
+
+    if ($exitCode -eq 0 -or $exitCode -eq 3010 -or $exitCode -eq -1978335189) {
+        Write-Host "$Name is installed or already present." -ForegroundColor Green
+    } else {
+        Write-Host "WARNING: $Name installation failed (exit code: $exitCode)." -ForegroundColor Yellow
+    }
+}
+
+$optionalPackages = @(
+    @{ Id = "Microsoft.VisualStudioCode"; Name = "Visual Studio Code" },
+    @{ Id = "Microsoft.WindowsTerminal"; Name = "Windows Terminal" },
+    @{ Id = "Microsoft.PowerToys"; Name = "Microsoft PowerToys" },
+    @{ Id = "voidtools.Everything"; Name = "Everything search" },
+    @{ Id = "ShareX.ShareX"; Name = "ShareX" },
+    @{ Id = "VideoLAN.VLC"; Name = "VLC media player" },
+    @{ Id = "File-New-Project.EarTrumpet"; Name = "EarTrumpet" },
+    @{ Id = "7zip.7zip"; Name = "7-Zip" }
+)
+
+foreach ($package in $optionalPackages) {
+    Install-OptionalWingetPackage -Id $package.Id -Name $package.Name
+}
+
+# --- 8. Install Microsoft Store from local offline packages ---
 Write-Host "Installing Microsoft Store from local offline packages..." -ForegroundColor Cyan
 
 if (-not (Test-Path $bin)) {
@@ -173,7 +206,7 @@ try {
     Write-Host "You might need to check Windows Update or Group Policy settings." -ForegroundColor Yellow
 }
 
-# --- 8. Re-register Microsoft Store (Fixing ms-windows-store protocol) ---
+# --- 9. Re-register Microsoft Store (Fixing ms-windows-store protocol) ---
 Write-Host "Re-registering Microsoft Store to fix protocols (bypassing missing explorer.exe)..." -ForegroundColor Cyan
 try {
     # Эта команда заново прописывает все системные связи для Магазина

@@ -28,6 +28,7 @@ import {
 import {
   openOverview, closeOverview, toggleOverview, isOverviewOpen,
 } from './ipc_overview.js';
+import { openEverything } from './everythingSearch.js';
 
 let cachedApps = [];
 let windowSettingsWin = null;
@@ -603,8 +604,16 @@ export default function () {
   });
 
   ipcMain.on('topbar:open-search', () => {
-    try { toggleOverview(); }
-    catch (err) { console.error('[topbar:open-search]', err.message); }
+    if (process.platform !== 'win32') {
+      try { toggleOverview(); }
+      catch (err) { console.error('[topbar:open-search]', err.message); }
+      return;
+    }
+
+    openEverything().catch((err) => {
+      console.error('[topbar:open-search] failed to launch Everything:', err.message);
+      dialog.showErrorBox('Не удалось открыть Everything', err.message);
+    });
   });
 
   ipcMain.on('topbar:open-settings', (event) => {
