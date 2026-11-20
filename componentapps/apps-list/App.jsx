@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import {
   Box, Grid, Card, CardActionArea, Typography, Chip, Stack,
   TextField, InputAdornment, Divider, CircularProgress,
@@ -106,6 +106,20 @@ export default function App({ desktopId }) {
 
   const scrollRef = useRef(null);
   const sentinelRef = useRef(null);
+
+  useLayoutEffect(() => {
+    const resetScroll = () => {
+      scrollRef.current?.scrollTo({ top: 0, left: 0 });
+      window.scrollTo({ top: 0, left: 0 });
+    };
+    const resetWhenVisible = () => {
+      if (document.visibilityState === 'visible') resetScroll();
+    };
+
+    resetScroll();
+    document.addEventListener('visibilitychange', resetWhenVisible);
+    return () => document.removeEventListener('visibilitychange', resetWhenVisible);
+  }, []);
 
   /* -------- Асинхронная загрузка трёх источников -------- */
   useEffect(() => {

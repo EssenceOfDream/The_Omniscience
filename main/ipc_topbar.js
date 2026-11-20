@@ -31,6 +31,7 @@ import {
 import { openEverything } from './everythingSearch.js';
 import { enableWindowsBackdropBlur } from './ipc_nativeWindows.js';
 import { installWindowsBackdropBlur } from './windowsBackdrop.js';
+import { resolveActiveWindow } from './topbarActiveWindow.js';
 
 let cachedApps = [];
 let windowSettingsWin = null;
@@ -171,11 +172,7 @@ function buildState() {
 
   const windows = [...ourWindows, ...devToolsWindows, ...native];
 
-  const fallbackWindowId = global.__focusedWindowId
-    || windows.find((w) => w.focused)?.id
-    || windows[0]?.id
-    || null;
-  const activeWindow = windows.find((w) => w.id === fallbackWindowId) || windows[0] || null;
+  const activeWindow = resolveActiveWindow(windows, global.__focusedWindowId);
 
   return {
     windows, activeWindow, apps: cachedApps,
