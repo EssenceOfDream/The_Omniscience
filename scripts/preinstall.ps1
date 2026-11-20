@@ -158,6 +158,8 @@ $optionalPackages = @(
     @{ Id = "Microsoft.WindowsTerminal"; Name = "Windows Terminal" },
     @{ Id = "Microsoft.PowerToys"; Name = "Microsoft PowerToys" },
     @{ Id = "voidtools.Everything"; Name = "Everything search" },
+    @{ Id = "BotProductions.IconViewer"; Name = "IconViewer" },
+    @{ Id = "CrystalRich.LockHunter"; Name = "LockHunter" },
     @{ Id = "ShareX.ShareX"; Name = "ShareX" },
     @{ Id = "VideoLAN.VLC"; Name = "VLC media player" },
     @{ Id = "File-New-Project.EarTrumpet"; Name = "EarTrumpet" },
