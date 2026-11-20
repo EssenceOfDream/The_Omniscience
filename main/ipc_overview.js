@@ -8,6 +8,8 @@ import {
 } from './ipc_windowManager.js';
 import { destroyViewsForParentWindowInstance } from './ipc_viewManager.js';
 import { getOverviewBounds } from './overviewBounds.js';
+import { enableWindowsBackdropBlur } from './ipc_nativeWindows.js';
+import { installWindowsBackdropBlur } from './windowsBackdrop.js';
 
 let overviewWindow = null;
 
@@ -61,6 +63,7 @@ export function openOverview() {
       backgroundColor: '#00000000',
     },
   });
+  installWindowsBackdropBlur(win, { apply: enableWindowsBackdropBlur });
 
   const windowRegistryId = `__overview__:${win.id}`;
   const overviewUrl = new URL(global.paths.overviewIndex);

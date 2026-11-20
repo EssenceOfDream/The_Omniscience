@@ -61,26 +61,32 @@ export default function PowerMenu() {
         inset: 0,
         width: '100vw',
         height: '100vh',
-        bgcolor: 'rgba(0,0,0,0.28)',
-        backdropFilter: 'blur(8px)',
+        bgcolor: 'rgba(8,10,20,0.2)',
+        backdropFilter: 'blur(14px)',
       }}
     >
       <Paper
         elevation={16}
         sx={{
           position: 'absolute',
-          top: 16,
-          right: 20,
-          width: 292,
-          p: 1.5,
-          borderRadius: 2,
-          bgcolor: 'rgba(30,30,46,0.97)',
-          border: '1px solid rgba(168,85,247,0.35)',
-          boxShadow: '0 16px 48px rgba(0,0,0,0.45)',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: 'min(760px, calc(100vw - 32px))',
+          maxHeight: 'calc(100vh - 32px)',
+          overflowY: 'auto',
+          p: { xs: 2, sm: 3 },
+          borderRadius: 4,
+          bgcolor: 'rgba(30,30,46,0.42)',
+          backgroundImage: 'linear-gradient(145deg, rgba(255,255,255,0.1), rgba(30,30,46,0.34))',
+          border: '1px solid rgba(210,190,255,0.28)',
+          boxShadow: '0 24px 80px rgba(0,0,0,0.34)',
+          backdropFilter: 'blur(24px) saturate(1.35)',
+          WebkitBackdropFilter: 'blur(24px) saturate(1.35)',
         }}
       >
-        <Stack direction="row" alignItems="center" sx={{ mb: 1 }}>
-          <Typography sx={{ flex: 1, fontSize: 14, fontWeight: 600 }}>
+        <Stack direction="row" sx={{ mb: 2, alignItems: 'center' }}>
+          <Typography sx={{ flex: 1, fontSize: 15, fontWeight: 600, letterSpacing: 0.2 }}>
             Питание
           </Typography>
           <IconButton
@@ -93,32 +99,74 @@ export default function PowerMenu() {
           </IconButton>
         </Stack>
 
-        <Stack spacing={0.75}>
+        <Stack direction="row" sx={{ flexWrap: 'wrap', justifyContent: 'center', gap: 1 }}>
           {actions.map(({ id, label, Icon, danger }) => (
             <Button
               key={id}
               disabled={busy}
               onClick={() => execute(id)}
-              startIcon={<Icon fontSize="small" />}
               sx={{
-                justifyContent: 'flex-start',
+                flex: '1 1 140px',
+                maxWidth: 160,
+                minHeight: 150,
+                flexDirection: 'column',
+                justifyContent: 'center',
+                gap: 1.5,
                 px: 1.25,
-                py: 1,
+                py: 1.5,
                 color: danger ? '#f38ba8' : '#f2f2f7',
                 textTransform: 'none',
                 fontSize: 13,
+                fontWeight: 500,
+                borderRadius: 3,
+                border: '1px solid rgba(255,255,255,0.08)',
+                backgroundColor: 'rgba(255,255,255,0.035)',
+                transition: 'background-color 160ms ease, border-color 160ms ease, transform 160ms ease',
                 '&:hover': {
-                  bgcolor: danger ? 'rgba(243,139,168,0.14)' : 'rgba(168,85,247,0.14)',
+                  bgcolor: danger ? 'rgba(243,139,168,0.13)' : 'rgba(168,85,247,0.14)',
+                  borderColor: danger ? 'rgba(243,139,168,0.38)' : 'rgba(168,85,247,0.38)',
+                  transform: 'translateY(-2px)',
+                },
+                '&:focus-visible': {
+                  outline: '2px solid rgba(210,190,255,0.9)',
+                  outlineOffset: 2,
+                },
+                '&:hover .power-menu-icon': {
+                  transform: 'scale(1.06)',
                 },
               }}
             >
-              {label}
+              <Box
+                component="span"
+                className="power-menu-icon"
+                sx={{
+                  width: 76,
+                  height: 76,
+                  display: 'grid',
+                  placeItems: 'center',
+                  borderRadius: '50%',
+                  color: danger ? '#ffc0d0' : '#e5d4ff',
+                  background: danger
+                    ? 'linear-gradient(145deg, rgba(243,139,168,0.28), rgba(243,139,168,0.08))'
+                    : 'linear-gradient(145deg, rgba(168,85,247,0.3), rgba(110,80,180,0.1))',
+                  border: danger
+                    ? '1px solid rgba(243,139,168,0.38)'
+                    : '1px solid rgba(200,170,255,0.34)',
+                  boxShadow: 'inset 0 1px 5px rgba(255,255,255,0.12), 0 8px 24px rgba(0,0,0,0.16)',
+                  transition: 'transform 160ms ease',
+                }}
+              >
+                <Icon sx={{ fontSize: 36 }} />
+              </Box>
+              <Typography component="span" sx={{ lineHeight: 1.35, textAlign: 'center' }}>
+                {label}
+              </Typography>
             </Button>
           ))}
         </Stack>
 
         {error && (
-          <Typography role="alert" sx={{ mt: 1, color: '#f38ba8', fontSize: 11 }}>
+          <Typography role="alert" sx={{ mt: 2, color: '#f38ba8', fontSize: 12, textAlign: 'center' }}>
             {error}
           </Typography>
         )}

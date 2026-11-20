@@ -500,6 +500,9 @@ while ($null -ne ($line = $reader.ReadLine())) {
                     [long]$request.hwnd, [int]$request.x, [int]$request.y,
                     [int]$request.width, [int]$request.height)
             }
+            'window-backdrop-blur' {
+                [OmniWin32]::EnableBackdropBlur([long]$request.hwnd)
+            }
             'z-order' {
                 [OmniWin32]::SetZOrder(
                     [long]$request.hwnd, [string]$request.layer)

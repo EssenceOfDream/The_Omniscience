@@ -69,6 +69,8 @@ public static class OmniWin32
     private const uint SPIF_UPDATEINIFILE = 0x0001;
     private const uint SPIF_SENDCHANGE = 0x0002;
     private const uint SWP_NOACTIVATE = 0x0010;
+    private const int WCA_ACCENT_POLICY = 19;
+    private const int ACCENT_ENABLE_BLURBEHIND = 3;
     private const int WM_APP = 0x8000;
     private static readonly HashSet<IntPtr> AppBars = new HashSet<IntPtr>();
     private static readonly Dictionary<IntPtr, RECT> AppBarRectangles = new Dictionary<IntPtr, RECT>();
@@ -139,6 +141,21 @@ public static class OmniWin32
         public uint uEdge;
         public RECT rc;
         public IntPtr lParam;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ACCENT_POLICY {
+        public int AccentState;
+        public int AccentFlags;
+        public int GradientColor;
+        public int AnimationId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WINDOWCOMPOSITIONATTRIBDATA {
+        public int Attribute;
+        public IntPtr Data;
+        public int SizeOfData;
     }
 
     [DllImport("user32.dll")]
@@ -218,6 +235,9 @@ public static class OmniWin32
     private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowCompositionAttribute(
+        IntPtr hwnd, ref WINDOWCOMPOSITIONATTRIBDATA data);
     [DllImport("user32.dll")]
     private static extern bool ShowWindowAsync(IntPtr hwnd, int command);
     [DllImport("user32.dll")]
@@ -1018,6 +1038,35 @@ public static class OmniWin32
         x = Math.Max(workArea.Left, Math.Min(x, workArea.Right - width));
         y = Math.Max(workArea.Top, Math.Min(y, workArea.Bottom - height));
         return new RECT { Left = x, Top = y, Right = x + width, Bottom = y + height };
+    }
+
+    public static bool EnableBackdropBlur(long hwnd)
+    {
+        IntPtr window = new IntPtr(hwnd);
+        if (!IsWindow(window)) return false;
+
+        ACCENT_POLICY policy = new ACCENT_POLICY {
+            AccentState = ACCENT_ENABLE_BLURBEHIND,
+            AccentFlags = 0,
+            GradientColor = 0,
+            AnimationId = 0
+        };
+        IntPtr policyPointer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(ACCENT_POLICY)));
+        try {
+            Marshal.StructureToPtr(policy, policyPointer, false);
+            WINDOWCOMPOSITIONATTRIBDATA data = new WINDOWCOMPOSITIONATTRIBDATA {
+                Attribute = WCA_ACCENT_POLICY,
+                Data = policyPointer,
+                SizeOfData = Marshal.SizeOf(typeof(ACCENT_POLICY))
+            };
+            if (!SetWindowCompositionAttribute(window, ref data)) {
+                throw new InvalidOperationException(
+                    "SetWindowCompositionAttribute failed: " + Marshal.GetLastWin32Error());
+            }
+            return true;
+        } finally {
+            Marshal.FreeHGlobal(policyPointer);
+        }
     }
 
     public static bool SetBounds(long hwnd, int x, int y, int width, int height)

@@ -178,7 +178,6 @@ if (-not (Test-Path $bin)) {
     exit 1
 }
 
-# Ищем основной пакет Microsoft Store
 $storeBundle = Get-ChildItem -Path $bin -Filter "Microsoft.WindowsStore_*.msixbundle" | Select-Object -First 1
 
 if (-not $storeBundle) {
@@ -186,7 +185,6 @@ if (-not $storeBundle) {
     exit 1
 }
 
-# 7.1 Установка зависимостей
 Write-Host "Installing dependencies..." -ForegroundColor Gray
 $dependencies = Get-ChildItem -Path $bin -Filter "*.appx"
 foreach ($dep in $dependencies) {
@@ -198,7 +196,6 @@ foreach ($dep in $dependencies) {
     }
 }
 
-# 7.2 Установка самого Microsoft Store
 Write-Host "Installing Microsoft Store bundle: $($storeBundle.Name)" -ForegroundColor Gray
 try {
     Add-AppxPackage -Path $storeBundle.FullName -ErrorAction Stop
@@ -211,7 +208,6 @@ try {
 # --- 9. Re-register Microsoft Store (Fixing ms-windows-store protocol) ---
 Write-Host "Re-registering Microsoft Store to fix protocols (bypassing missing explorer.exe)..." -ForegroundColor Cyan
 try {
-    # Эта команда заново прописывает все системные связи для Магазина
     Get-AppXPackage *WindowsStore* -AllUsers | Foreach {Add-AppxPackage -DisableDevelopmentMode -Register "$($_.InstallLocation)\AppXManifest.xml" -ErrorAction Stop}
     Write-Host "Re-registration successful." -ForegroundColor Green
 } catch {

@@ -1,10 +1,11 @@
 import electronPkg from 'electron';
 const { BrowserWindow, screen } = electronPkg;
 import {
-  getWindowsExplorerTaskbarBounds, recoverWindowsShell,
+  enableWindowsBackdropBlur, getWindowsExplorerTaskbarBounds, recoverWindowsShell,
 } from './ipc_nativeWindows.js';
 import { getWindowsPanelLayout } from './windowsPanelLayout.js';
 import { forceWindowPlacementAboveTaskbar } from './topbarPlacement.js';
+import { installWindowsBackdropBlur } from './windowsBackdrop.js';
 
 const TOPBAR_H = process.platform === 'win32' ? 28 : 72;
 const CONTROL_WINDOW_W = 112;
@@ -70,6 +71,7 @@ export default async function () {
       webSecurity: true,
     },
   });
+  installWindowsBackdropBlur(global.topbarWindow, { apply: enableWindowsBackdropBlur });
 
   const reportRendererFailure = (reason) => {
     recoverWindowsShell(reason).catch((error) => {
@@ -129,6 +131,7 @@ export default async function () {
         webSecurity: true,
       },
     });
+    installWindowsBackdropBlur(global.controlWindow, { apply: enableWindowsBackdropBlur });
     global.controlWindow.setAlwaysOnTop(true, 'screen-saver');
     global.controlWindow.webContents.on('did-fail-load', (
       _event, errorCode, description, _url, isMainFrame,

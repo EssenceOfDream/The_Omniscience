@@ -29,6 +29,8 @@ import {
   openOverview, closeOverview, toggleOverview, isOverviewOpen,
 } from './ipc_overview.js';
 import { openEverything } from './everythingSearch.js';
+import { enableWindowsBackdropBlur } from './ipc_nativeWindows.js';
+import { installWindowsBackdropBlur } from './windowsBackdrop.js';
 
 let cachedApps = [];
 let windowSettingsWin = null;
@@ -244,6 +246,7 @@ function openWindowSettings(windowId) {
       backgroundColor: '#00000000',
     },
   });
+  installWindowsBackdropBlur(win, { apply: enableWindowsBackdropBlur });
 
   try { win.setAlwaysOnTop(true, 'screen-saver'); } catch { /* ignore */ }
 
@@ -351,6 +354,7 @@ function openPowerMenu() {
       backgroundColor: '#00000000',
     },
   });
+  installWindowsBackdropBlur(win, { apply: enableWindowsBackdropBlur });
 
   powerMenuWindow = win;
   try { win.setAlwaysOnTop(true, 'screen-saver'); } catch (error) {

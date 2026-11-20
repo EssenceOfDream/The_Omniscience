@@ -4,6 +4,8 @@ import { pathToFileURL } from 'url';
 import path from 'path';
 import { attachToWebContents } from './ipc_browserContextMenu.js';
 import { clampBoundsToWorkArea } from './windowBounds.js';
+import { enableWindowsBackdropBlur } from './ipc_nativeWindows.js';
+import { installWindowsBackdropBlur } from './windowsBackdrop.js';
 
 /* ------------------------------------------------------------------ */
 /* Реестр окон                                                         */
@@ -252,6 +254,7 @@ export function createWindowByRequest({
     },
   });
 
+  installWindowsBackdropBlur(win, { apply: enableWindowsBackdropBlur });
   win.setBackgroundColor('#00000000');
 
   try { attachToWebContents(win.webContents); } catch { /* ignore */ }

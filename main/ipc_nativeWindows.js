@@ -503,6 +503,17 @@ export async function getWindowsExplorerTaskbarBounds() {
   return bounds;
 }
 
+export async function enableWindowsBackdropBlur(win) {
+  if (process.platform !== 'win32' || !win || win.isDestroyed()) return false;
+
+  const hwnd = getWin32Hwnd(win);
+  if (!hwnd) throw new Error('Could not read the native window handle for backdrop blur');
+
+  const enabled = await requestWin32('window-backdrop-blur', { hwnd });
+  if (!enabled) throw new Error('Windows did not enable backdrop blur for the window');
+  return true;
+}
+
 async function showWindowsShellError(reason, explorerRestored) {
   const detail = explorerRestored
     ? 'Explorer и его панель задач работают.'
