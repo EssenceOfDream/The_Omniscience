@@ -163,7 +163,8 @@ $optionalPackages = @(
     @{ Id = "ShareX.ShareX"; Name = "ShareX" },
     @{ Id = "VideoLAN.VLC"; Name = "VLC media player" },
     @{ Id = "File-New-Project.EarTrumpet"; Name = "EarTrumpet" },
-    @{ Id = "7zip.7zip"; Name = "7-Zip" }
+    @{ Id = "7zip.7zip"; Name = "7-Zip" },
+    @{ Id = "dotPDN.PaintDotNet"; Name = "Paint.NET" }
 )
 
 foreach ($package in $optionalPackages) {
