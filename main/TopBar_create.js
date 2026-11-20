@@ -4,6 +4,7 @@ import {
   getWindowsExplorerTaskbarBounds, recoverWindowsShell,
 } from './ipc_nativeWindows.js';
 import { getWindowsPanelLayout } from './windowsPanelLayout.js';
+import { forceWindowPlacementAboveTaskbar } from './topbarPlacement.js';
 
 const TOPBAR_H = process.platform === 'win32' ? 28 : 72;
 const CONTROL_WINDOW_W = 112;
@@ -13,24 +14,20 @@ function ensureControlWindowAboveTaskbar(bounds) {
   if (!win || win.isDestroyed()) return;
 
   try {
-    win.setBounds(bounds, false);
-    const actualBounds = win.getBounds();
-    if (actualBounds.x !== bounds.x || actualBounds.y !== bounds.y
-      || actualBounds.width !== bounds.width || actualBounds.height !== bounds.height) {
-      throw new Error(
-        `control window bounds did not apply (expected ${JSON.stringify(bounds)}, got ${JSON.stringify(actualBounds)})`,
-      );
-    }
-    if (!win.isAlwaysOnTop()) win.setAlwaysOnTop(true, 'screen-saver');
-    win.moveTop();
-    if (!win.isAlwaysOnTop()) {
-      win.setAlwaysOnTop(true, 'screen-saver');
-      if (!win.isAlwaysOnTop()) {
-        throw new Error('control window is not always-on-top after forcing its z-order');
-      }
-    }
+    forceWindowPlacementAboveTaskbar(win, bounds);
   } catch (error) {
     console.error('[topbar] failed to keep window controls above the Windows taskbar:', error.message);
+  }
+}
+
+function ensureTopbarAboveTaskbar(bounds) {
+  const win = global.topbarWindow;
+  if (!win || win.isDestroyed()) return;
+
+  try {
+    forceWindowPlacementAboveTaskbar(win, bounds);
+  } catch (error) {
+    console.error('[topbar] failed to keep the panel above the Windows taskbar:', error.message);
   }
 }
 
@@ -99,6 +96,15 @@ export default async function () {
   global.topbarWindow.loadURL(topbarUrl).catch((error) => {
     reportRendererFailure(`TopBar load failed: ${error.message}`);
   });
+  global.topbarWindow.once('ready-to-show', () => ensureTopbarAboveTaskbar(layout.topbar));
+  global.topbarWindow.on('show', () => ensureTopbarAboveTaskbar(layout.topbar));
+  global.topbarWindow.on('restore', () => ensureTopbarAboveTaskbar(layout.topbar));
+  const topbarPlacementTimer = setInterval(
+    () => ensureTopbarAboveTaskbar(layout.topbar),
+    1000,
+  );
+  topbarPlacementTimer.unref();
+  global.topbarWindow.once('closed', () => clearInterval(topbarPlacementTimer));
 
   if (layout.controls) {
     global.controlWindow = new BrowserWindow({
@@ -159,9 +165,8 @@ export default async function () {
     if (display.id !== screen.getPrimaryDisplay().id || !changedMetrics.includes('bounds')) return;
     getPanelLayout().then((nextLayout) => {
       layout = nextLayout;
-      if (!global.topbarWindow.isDestroyed()) global.topbarWindow.setBounds(layout.topbar);
+      ensureTopbarAboveTaskbar(layout.topbar);
       if (global.controlWindow && !global.controlWindow.isDestroyed() && layout.controls) {
-        global.controlWindow.setBounds(layout.controls);
         ensureControlWindowAboveTaskbar(layout.controls);
       }
     }).catch((error) => {
