@@ -32,6 +32,10 @@ import { openEverything } from './everythingSearch.js';
 import { enableWindowsBackdropBlur } from './ipc_nativeWindows.js';
 import { installWindowsBackdropBlur } from './windowsBackdrop.js';
 import { resolveActiveWindow } from './topbarActiveWindow.js';
+import {
+  mapNativeWindowForTopbar,
+  selectTaskbarHiddenWindows,
+} from './hiddenWindows.js';
 
 let cachedApps = [];
 let windowSettingsWin = null;
@@ -149,39 +153,26 @@ function buildState() {
 
   const native = nativeWindows
     .filter((w) => !ourIds.has(normalizeNativeId(w.id)))
-    .map((w) => {
-      const pidNum = Number(w.pid) || null;
-      const normId = normalizeNativeId(w.id);
+    .map((w) => mapNativeWindowForTopbar(
+      w,
+      normalizeNativeId(w.id),
+      activeNorm,
+    ));
 
-      return {
-        id: w.id, xid: normId, kind: 'native',
-        title: w.title || w.wmClass || 'Окно',
-        icon: w.icon || null,
-        maximized: !!w.isMaximized,
-        minimized: !!w.isMinimized,
-        isHidden: false,
-        focused: !!(activeNorm && normId === activeNorm),
-        wmClass: w.wmClass,
-        x: w.x, y: w.y, width: w.width, height: w.height,
-        isBridgeOverlay: false, daemonWindowId: null, gtkXid: null,
-        isDevTools: false, ownerId: null,
-        pid: pidNum, parentXid: null,
-        overlayWindowId: null,
-      };
-    });
+  const hiddenWindows = selectTaskbarHiddenWindows(native);
 
   const windows = [...ourWindows, ...devToolsWindows, ...native];
 
   const activeWindow = resolveActiveWindow(windows, global.__focusedWindowId);
 
   return {
-    windows, activeWindow, apps: cachedApps,
+    windows, hiddenWindows, activeWindow, apps: cachedApps,
     isWindowsPanel: process.platform === 'win32',
     overviewTabs: cfg.overviewTabs || [
       { id: 'apps-list', visible: true },
       { id: 'settings', visible: true },
     ],
-    showWindowList: process.platform !== 'win32' && (cfg.showWindowList ?? true),
+    showWindowList: cfg.showWindowList ?? true,
     showClock: cfg.showClock ?? true,
     showClockMs: cfg.showClockMs ?? false,
     overviewOpen: isOverviewOpen(),

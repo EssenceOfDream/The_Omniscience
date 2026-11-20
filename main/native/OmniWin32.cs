@@ -17,6 +17,8 @@ public sealed class OmniWindowInfo
     public int y { get; set; }
     public int width { get; set; }
     public int height { get; set; }
+    public bool visible { get; set; }
+    public bool taskbarHidden { get; set; }
     public bool minimized { get; set; }
     public bool maximized { get; set; }
     public bool focused { get; set; }
@@ -37,6 +39,9 @@ public static class OmniWin32
     private const int WS_MAXIMIZEBOX = 0x00010000;
     private const int WS_POPUP = unchecked((int)0x80000000);
     private const int GWL_EXSTYLE = -20;
+    private const long WS_EX_TOOLWINDOW = 0x00000080L;
+    private const long WS_EX_LAYERED = 0x00080000L;
+    private const long WS_EX_APPWINDOW = 0x00040000L;
     private const int WS_EX_TOPMOST = 0x00000008;
     private const uint GW_OWNER = 4;
     private const uint MONITOR_DEFAULTTONEAREST = 2;
@@ -283,11 +288,9 @@ public static class OmniWin32
 
     private static OmniWindowInfo ReadWindow(IntPtr hwnd, IntPtr foreground, int ownPid)
     {
-        if (!IsWindowVisible(hwnd)) return null;
         uint pid;
         GetWindowThreadProcessId(hwnd, out pid);
         if (pid == ownPid) return null;
-        if ((((long)GetWindowLongPtr(hwnd, -20)) & 0x80L) != 0) return null;
 
         var title = new StringBuilder(2048);
         if (GetWindowText(hwnd, title, title.Capacity) <= 0) return null;
@@ -296,6 +299,14 @@ public static class OmniWin32
         int width = rect.Right - rect.Left;
         int height = rect.Bottom - rect.Top;
         if (width <= 0 || height <= 0) return null;
+        long extendedStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
+        bool visible = IsWindowVisible(hwnd);
+        bool taskbarHidden = !visible
+            || (extendedStyle & WS_EX_TOOLWINDOW) != 0
+            // Transparent overlays may be omitted from Explorer despite WS_EX_APPWINDOW.
+            || (extendedStyle & WS_EX_LAYERED) != 0
+            || (GetWindow(hwnd, GW_OWNER) != IntPtr.Zero
+                && (extendedStyle & WS_EX_APPWINDOW) == 0);
 
         return new OmniWindowInfo {
             id = hwnd.ToInt64().ToString(CultureInfo.InvariantCulture),
@@ -306,6 +317,8 @@ public static class OmniWin32
             y = rect.Top,
             width = width,
             height = height,
+            visible = visible,
+            taskbarHidden = taskbarHidden,
             minimized = IsIconic(hwnd),
             maximized = IsZoomed(hwnd),
             focused = hwnd == foreground
@@ -1318,7 +1331,7 @@ public static class OmniWin32
         uint foregroundThread = foreground == IntPtr.Zero ? 0 : GetWindowThreadProcessId(foreground, out ignoredPid);
         uint targetThread = GetWindowThreadProcessId(window, out ignoredPid);
 
-        if (IsIconic(window)) ShowWindowAsync(window, 9);
+        if (IsIconic(window) || !IsWindowVisible(window)) ShowWindowAsync(window, SW_RESTORE);
 
         bool attachedForeground = false;
         bool attachedTarget = false;

@@ -27,13 +27,16 @@ export default function WindowList({ windows = [], onFocus, onClose }) {
       {windows.map((w) => {
         const isActive = !!w.focused;
         const isMinimized = !!w.minimized;
+        const isHidden = !!w.isHidden;
+        const isInactive = isMinimized || isHidden;
+        const label = w.processName || w.title || w.kind || 'Окно';
 
-        const border = `${isMinimized ? BORDER_STYLE_MINIMIZED : BORDER_STYLE_NORMAL} ${isActive ? BORDER_COLOR_ACTIVE : isMinimized ? BORDER_COLOR_MINIMIZED : BORDER_COLOR_NORMAL}`;
+        const border = `${isInactive ? BORDER_STYLE_MINIMIZED : BORDER_STYLE_NORMAL} ${isActive ? BORDER_COLOR_ACTIVE : isInactive ? BORDER_COLOR_MINIMIZED : BORDER_COLOR_NORMAL}`;
 
         return (
           <Tooltip
             key={w.id}
-            title={w.title || w.kind || 'Окно'}
+            title={`${label}${w.title && w.title !== label ? ` — ${w.title}` : ''}${isHidden ? ' (скрыто)' : ''}`}
             // 1. Всегда позиционировать сверху
             placement="top"
             // 2. Отключаем автоматический сдвиг (flip) при прокрутке или нехватке места
@@ -68,6 +71,7 @@ export default function WindowList({ windows = [], onFocus, onClose }) {
               sx={{
                 border,
                 color: isActive ? '#fff' : '#ddd',
+                opacity: isHidden ? 0.7 : 1,
                 textTransform: 'none',
                 height: 24,
                 minWidth: 0,
@@ -85,6 +89,7 @@ export default function WindowList({ windows = [], onFocus, onClose }) {
                 },
                 WebkitAppRegion: 'no-drag',
               }}
+              aria-label={`${label}${w.title && w.title !== label ? ` — ${w.title}` : ''}`}
             >
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
                 {w.icon
@@ -94,7 +99,7 @@ export default function WindowList({ windows = [], onFocus, onClose }) {
                   flex: 1, minWidth: 0, overflow: 'hidden',
                   textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 }}>
-                  {w.title || w.kind || 'Окно'}
+                  {label}
                 </Box>
               </Box>
             </Button>

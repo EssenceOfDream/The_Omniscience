@@ -11,6 +11,7 @@ import WindowList from './topbar/WindowList';
 
 export default function TopBar({
   windows = [],
+  hiddenWindows = [],
   activeWindow,
   isWindowsPanel = false,
   showWindowList = true,
@@ -85,10 +86,13 @@ export default function TopBar({
           gap: 0.5, px: 1, minWidth: 0,
         }}>
           {menuButton}
-          {showWindowList && (
-            <WindowList windows={windows} onFocus={onFocusWindow} onClose={onCloseWindow} />
+          {(isWindowsPanel || showWindowList) && (
+            <WindowList
+              windows={hiddenWindows}
+              onFocus={onFocusWindow}
+              onClose={onCloseWindow}
+            />
           )}
-          <Box sx={{ flex: 1, minWidth: 0 }} />
           {controls}
         </Box>
       ) : (
