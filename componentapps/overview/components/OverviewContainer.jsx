@@ -3,7 +3,8 @@ import { Box, Typography } from '@mui/material';
 import Overview from './Overview';
 
 function getOverviewInstanceId() {
-  return new URLSearchParams(window.location.search).get('overviewInstance');
+  const params = new URLSearchParams(window.location.search);
+  return params.get('overviewInstance') || params.get('windowId') || null;
 }
 
 function useOverviewState() {

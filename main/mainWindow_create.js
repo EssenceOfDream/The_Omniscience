@@ -1,5 +1,6 @@
 import electronPkg from 'electron';
 const { BrowserWindow, screen, app, ipcMain } = electronPkg;
+import path from 'node:path';
 import { attachToWebContents } from './ipc_browserContextMenu.js';
 import {
     restoreWindowsExplorerForShutdown,
@@ -150,6 +151,7 @@ export default async function () {
         focusable: true,
         skipTaskbar: true,
         webPreferences: {
+            preload: path.join(global.paths.componentappsDir, 'desktop', 'preload.js'),
             enableRemoteModule: false,
             nodeIntegration: false,
             contextIsolation: true,

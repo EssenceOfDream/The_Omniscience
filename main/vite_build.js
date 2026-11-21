@@ -58,12 +58,7 @@ export default async function () {
   const distDir = global.paths.distDir;
   const componentappsDir = global.paths.componentappsDir;
 
-  const input = {
-    main: path.join(rootDir, 'src', 'index.html'),
-    topbar: path.join(rootDir, 'src', 'topbar.html'),
-    overview: path.join(rootDir, 'src', 'overview.html'),
-    powerMenu: path.join(rootDir, 'src', 'power-menu.html'),
-  };
+  const input = {};
 
   const componentInputs = [];
   if (fs.existsSync(componentappsDir)) {

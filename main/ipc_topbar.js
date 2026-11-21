@@ -92,7 +92,7 @@ function normalizeNativeId(x) {
 /* Build state                                                         */
 /* ------------------------------------------------------------------ */
 
-function buildState() {
+export function buildTopbarState() {
   const cfg = global.config?.topbar || {};
   const { windows: nativeWindows, activeXid } = getNativeState();
   const activeNorm = normalizeNativeId(activeXid);
@@ -181,9 +181,14 @@ function buildState() {
 
 export function broadcastTopbarState() {
   try {
-    const state = buildState();
+    const state = buildTopbarState();
     for (const w of [global.topbarWindow, global.controlWindow]) {
       if (w && !w.isDestroyed()) w.webContents.send('topbar:state-update', state);
+    }
+    for (const entry of listWindows()) {
+      if (!['topbar-panel', 'window-controls', 'overview'].includes(entry.appId)) continue;
+      const win = getWindowById(entry.id);
+      if (win && !win.isDestroyed()) win.webContents.send('topbar:state-update', state);
     }
   } catch { /* ignore */ }
 }
@@ -198,7 +203,7 @@ function settingsUrlFor(windowId) {
   return `${base}?${q.toString()}`;
 }
 
-function openWindowSettings(windowId) {
+export function openWindowSettings(windowId) {
   if (!windowId) return;
 
   if (windowSettingsWin && !windowSettingsWin.isDestroyed()) {
@@ -262,15 +267,17 @@ function openWindowSettings(windowId) {
   windowSettingsWin = win;
 }
 
-function closePowerMenu() {
+export function closePowerMenu() {
   if (!powerMenuWindow || powerMenuWindow.isDestroyed()) {
     powerMenuWindow = null;
+    global.powerMenuWindow = null;
     return;
   }
+  global.powerMenuWindow = null;
   powerMenuWindow.close();
 }
 
-function openSystemSettings() {
+export function openSystemSettings() {
   const workArea = screen.getPrimaryDisplay().workArea;
   const width = Math.min(1080, workArea.width);
   const height = Math.min(720, workArea.height);
@@ -300,7 +307,7 @@ function openSystemSettings() {
   });
 }
 
-function openPowerMenu() {
+export function openPowerMenu() {
   if (powerMenuWindow && !powerMenuWindow.isDestroyed()) {
     powerMenuWindow.focus();
     return;
@@ -334,7 +341,7 @@ function openPowerMenu() {
     hasShadow: false,
     type: 'toolbar',
     webPreferences: {
-      preload: global.paths.reactPreload,
+      preload: path.join(global.paths.componentappsDir, 'power-menu', 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: true,
@@ -345,6 +352,7 @@ function openPowerMenu() {
   installWindowsBackdropBlur(win, { apply: enableWindowsBackdropBlur });
 
   powerMenuWindow = win;
+  global.powerMenuWindow = win;
   try { win.setAlwaysOnTop(true, 'screen-saver'); } catch (error) {
     console.warn('[power-menu] failed to set overlay z-order:', error.message);
   }
@@ -367,10 +375,11 @@ function openPowerMenu() {
       console.error('[power-menu] failed to unregister overlay window:', error.message);
     }
     if (powerMenuWindow === win) powerMenuWindow = null;
+    if (global.powerMenuWindow === win) global.powerMenuWindow = null;
   });
 }
 
-async function performPowerAction(action) {
+export async function performPowerAction(action) {
   if (process.platform === 'win32') {
     if (action === 'sleep') return suspendWindows();
     const args = {
@@ -407,7 +416,7 @@ async function performPowerAction(action) {
   throw new Error(`Power actions are not supported on ${process.platform}`);
 }
 
-function schedulePowerAction(action) {
+export function schedulePowerAction(action) {
   setTimeout(() => {
     performPowerAction(action).catch((error) => {
       console.error(`[power-menu] ${action} failed:`, error.message);
@@ -488,8 +497,6 @@ function getWindowData(id) {
 export default function () {
   global.topbarBroadcast = broadcastTopbarState;
 
-  ipcMain.handle('topbar:get-state', () => buildState());
-
   ipcMain.on('shell-session:renderer-error', (event, payload) => {
     if (event.sender !== global.topbarWindow?.webContents
       && event.sender !== global.controlWindow?.webContents) return;
@@ -499,75 +506,11 @@ export default function () {
     });
   });
 
-  /* --- Overview --- */
-  ipcMain.on('topbar:toggle-overview', () => {
-    try { toggleOverview(); } catch (e) { console.error('[topbar:toggle-overview]', e?.message || e); }
-  });
-  ipcMain.on('topbar:open-overview', () => {
-    try { openOverview(); } catch (e) { console.error('[topbar:open-overview]', e?.message || e); }
-  });
-  ipcMain.on('topbar:close-overview', () => {
-    try { closeOverview(); } catch (e) { console.error('[topbar:close-overview]', e?.message || e); }
-  });
-  ipcMain.on('topbar:toggle-power-menu', (event) => {
-    if (event.sender !== global.topbarWindow?.webContents) return;
-    try {
-      if (powerMenuWindow && !powerMenuWindow.isDestroyed()) closePowerMenu();
-      else openPowerMenu();
-    } catch (error) {
-      console.error('[power-menu] failed to toggle menu:', error.message);
-    }
-  });
-  ipcMain.on('power-menu:close', (event) => {
-    if (event.sender !== powerMenuWindow?.webContents) return;
-    closePowerMenu();
-  });
-  ipcMain.handle('power-menu:execute', (event, { action } = {}) => {
-    if (event.sender !== powerMenuWindow?.webContents) {
-      return { ok: false, error: 'unauthorized' };
-    }
-    if (!['logout', 'shutdown', 'restart', 'sleep'].includes(action)) {
-      return { ok: false, error: 'invalid_power_action' };
-    }
-    closePowerMenu();
-    schedulePowerAction(action);
-    return { ok: true };
-  });
-
-  /* --- Управление окнами --- */
-  ipcMain.on('topbar:focus-window', (_e, { id }) => {
-    focusWindowById(id).catch((e) => console.error('[topbar:focus-window]', e?.message || e));
-  });
-  ipcMain.on('topbar:close-window', (_e, payload = {}) => {
-    const { id } = payload || {};
-    const targetId = id ?? global.__focusedWindowId ?? null;
-    if (targetId == null) return;
-    closeWindowById(targetId).catch((e) => console.error('[topbar:close-window]', e?.message || e));
-  });
-  ipcMain.on('topbar:minimize-window', (_e, payload = {}) => {
-    const { id } = payload || {};
-    const targetId = id ?? global.__focusedWindowId ?? null;
-    if (targetId == null) return;
-    minimizeWindowById(targetId).catch((e) => console.error('[topbar:minimize-window]', e?.message || e));
-  });
-  ipcMain.on('topbar:maximize-window', (_e, payload = {}) => {
-    const { id, maximized } = payload || {};
-    const targetId = id ?? global.__focusedWindowId ?? null;
-    if (targetId == null) return;
-    maximizeWindowById(targetId, maximized).catch((e) => console.error('[topbar:maximize-window]', e?.message || e));
-  });
-
   ipcMain.on('topbar:open-devtools', (_e, { id }) => {
     if (!id) return;
     const win = getWindowById(id);
     if (!win) return;
     win.webContents.openDevTools({ mode: 'detach' });
-  });
-
-  /* --- Window settings --- */
-  ipcMain.on('topbar:open-window-settings', (_e, { id }) => {
-    try { openWindowSettings(id); }
-    catch (e) { console.error('[topbar:open-window-settings]', e?.message || e); }
   });
 
   ipcMain.handle('window-settings:get', (_e, { id }) => getWindowData(id));
@@ -595,36 +538,6 @@ export default function () {
     console.log('[topbar] launch', appRef);
   });
 
-  ipcMain.on('topbar:open-search', () => {
-    if (process.platform !== 'win32') {
-      try { toggleOverview(); }
-      catch (err) { console.error('[topbar:open-search]', err.message); }
-      return;
-    }
-
-    openEverything().catch((err) => {
-      console.error('[topbar:open-search] failed to launch Everything:', err.message);
-      dialog.showErrorBox('Не удалось открыть Everything', err.message);
-    });
-  });
-
-  ipcMain.on('topbar:open-settings', (event) => {
-    if (event.sender !== global.topbarWindow?.webContents) return;
-    try {
-      openSystemSettings();
-    } catch (error) {
-      console.error('[topbar:open-settings] failed to open settings window:', error.message);
-      dialog.showErrorBox('Не удалось открыть параметры', error.message);
-    }
-  });
-  ipcMain.on('topbar:logout', () => {
-    openPowerMenu();
-  });
-
-  ipcMain.handle('topbar:get-window-bounds', (_e, { id }) => {
-    const win = getWindowById(id);
-    return win ? win.getBounds() : null;
-  });
 
   setTimeout(() => { initTopbarState(); }, 0);
 

@@ -877,6 +877,76 @@ function resolveTarget(id) {
   }
 }
 
+export async function prepareNativeWindowDrag(id, mode, direction) {
+  try {
+    const target = resolveTarget(id);
+    if (!target) return { ok: false, abort: true };
+
+    let hwnd = target.hwnd;
+    if (target.kind === 'native' && !win32Windows.some((window) => window.id === hwnd)) {
+      return { ok: false, abort: true };
+    }
+    if (target.kind === 'our') {
+      const targetWindow = getWindowById(target.appId);
+      if (!targetWindow) return { ok: false, abort: true };
+      hwnd = getWin32Hwnd(targetWindow);
+    }
+    if (!hwnd) return { ok: false, abort: true };
+
+    const prepared = await requestWin32('prepare-drag', { hwnd, mode, direction });
+    if (!prepared) return { ok: false, abort: true };
+    return {
+      ok: true,
+      kind: 'native',
+      nativeDrag: prepared.nativeDrag,
+      cursor: screen.screenToDipPoint({ x: prepared.cursorX, y: prepared.cursorY }),
+      bounds: screen.screenToDipRect(null, {
+        x: prepared.x,
+        y: prepared.y,
+        width: prepared.width,
+        height: prepared.height,
+      }),
+    };
+  } catch (error) {
+    if (DEBUG) dbgWarn('prepare-drag error:', error?.message || error);
+    return { ok: false, abort: true };
+  }
+}
+
+export async function setNativeWindowBounds(id, bounds) {
+  try {
+    const target = resolveTarget(id);
+    if (!target || !bounds) return false;
+
+    if (target.kind === 'our') {
+      const win = getWindowById(target.appId);
+      if (!win) return false;
+      win.setBounds({
+        x: Math.round(num(bounds.x)),
+        y: Math.round(num(bounds.y)),
+        width: Math.round(num(bounds.width, 100)),
+        height: Math.round(num(bounds.height, 100)),
+      });
+      return true;
+    }
+
+    if (target.kind === 'native' && target.hwnd) {
+      if (!win32Windows.some((window) => window.id === target.hwnd)) return false;
+      const rect = screen.dipToScreenRect(null, bounds);
+      return !!await requestWin32WindowAction('bounds', {
+        hwnd: target.hwnd,
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+      }, { elevateOnFailure: true });
+    }
+  } catch (error) {
+    console.warn('[nativeWindows:win32] window bounds update failed:', error?.message || error);
+  }
+  return false;
+}
+
 export async function focusWindowById(id) {
   try {
     const t = resolveTarget(id);
@@ -1112,75 +1182,6 @@ export default async function () {
     failWin32AdminRequests(new Error('Application is shutting down'));
   });
 
-  /* -------- prepare-drag -------- */
-  ipcMain.handle('native-window:prepare-drag', async (_e, { id, mode, direction }) => {
-    try {
-      const t = resolveTarget(id);
-      if (!t) return { ok: false, abort: true };
-
-      let hwnd = t.hwnd;
-      if (t.kind === 'native' && !win32Windows.some((window) => window.id === hwnd)) {
-        return { ok: false, abort: true };
-      }
-      if (t.kind === 'our') {
-        const targetWindow = getWindowById(t.appId);
-        if (!targetWindow) return { ok: false, abort: true };
-        hwnd = getWin32Hwnd(targetWindow);
-      }
-      if (!hwnd) return { ok: false, abort: true };
-
-      const prepared = await requestWin32('prepare-drag', { hwnd, mode, direction });
-      if (!prepared) return { ok: false, abort: true };
-      const bounds = screen.screenToDipRect(null, {
-        x: prepared.x, y: prepared.y,
-        width: prepared.width, height: prepared.height,
-      });
-      const cursor = screen.screenToDipPoint({
-        x: prepared.cursorX, y: prepared.cursorY,
-      });
-      return { ok: true, kind: 'native', nativeDrag: prepared.nativeDrag, cursor, bounds };
-    } catch (e) {
-      if (DEBUG) dbgWarn('prepare-drag error:', e?.message || e);
-      return { ok: false, abort: true };
-    }
-  });
-
-  /* -------- set-bounds -------- */
-  ipcMain.on('native-window:set-bounds', async (_e, { id, bounds }) => {
-    try {
-      const t = resolveTarget(id);
-      if (!t || !bounds) return;
-
-      if (t.kind === 'our') {
-        const w = getWindowById(t.appId);
-        if (w) {
-          w.setBounds({
-            x: Math.round(num(bounds.x)),
-            y: Math.round(num(bounds.y)),
-            width: Math.round(num(bounds.width, 100)),
-            height: Math.round(num(bounds.height, 100)),
-          });
-        }
-        return;
-      }
-      if (t.kind === 'native' && t.hwnd) {
-        if (!win32Windows.some((window) => window.id === t.hwnd)) return;
-        const rect = screen.dipToScreenRect(null, bounds);
-        const ok = await requestWin32WindowAction('bounds', {
-          hwnd: t.hwnd,
-          x: rect.x, y: rect.y,
-          width: rect.width, height: rect.height,
-        }, { elevateOnFailure: true });
-        if (!ok) console.warn('[nativeWindows:win32] SetWindowPos was denied for window', t.hwnd);
-      }
-    } catch (e) {
-      console.warn('[nativeWindows:win32] privileged window move failed:', e?.message || e);
-    }
-  });
-
-  ipcMain.on('native-window:drag-end', () => {
-    safe(refreshWin32Windows(), 'drag-end.refresh');
-  });
 
   /* -------- прямые IPC-каналы -------- */
   ipcMain.handle('native-window:focus', (_e, { id }) => focusWindowById(id));

@@ -20,10 +20,11 @@ export default function () {
         webappsDir: path.join(root, 'webapps'),
         componentappsDir: path.join(root, 'componentapps'),
 
-        reactIndex: pathToFileURL(path.join(root, 'dist', 'src', 'index.html')).href,
-        topBarIndex: pathToFileURL(path.join(root, 'dist', 'src', 'topbar.html')).href,
-        overviewIndex: pathToFileURL(path.join(root, 'dist', 'src', 'overview.html')).href,
-        powerMenuIndex: pathToFileURL(path.join(root, 'dist', 'src', 'power-menu.html')).href,
+        reactIndex: pathToFileURL(path.join(root, 'dist', 'componentapps', 'desktop', 'index.html')).href,
+        topBarIndex: pathToFileURL(path.join(root, 'dist', 'componentapps', 'topbar-panel', 'index.html')).href,
+        windowControlsIndex: pathToFileURL(path.join(root, 'dist', 'componentapps', 'window-controls', 'index.html')).href,
+        overviewIndex: pathToFileURL(path.join(root, 'dist', 'componentapps', 'overview', 'index.html')).href,
+        powerMenuIndex: pathToFileURL(path.join(root, 'dist', 'componentapps', 'power-menu', 'index.html')).href,
 
         reactPreload: path.join(root, '.temp', 'reactPreload.cjs'),
         extensionsPreload: path.join(root, '.temp', 'extensionsPreload.cjs'),

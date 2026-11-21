@@ -1,6 +1,6 @@
 import React from 'react';
-import { useSetting } from '../settings/useSettings';
-import { useProjectRoot, resolveForDisplay } from '../viewRuntime/paths';
+import { useSetting } from '../../../src/settings/useSettings';
+import { useProjectRoot, resolveForDisplay } from '../../../src/viewRuntime/paths';
 
 const CUSTOM_BACKGROUNDS = {
   // 'MyCustom': React.lazy(() => import('./backgrounds/MyCustom')),

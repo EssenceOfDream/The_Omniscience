@@ -1,6 +1,5 @@
 export default function () {
   global.$.ipc_errorLogger();
-  global.$.ipc_mainWindow();
   global.$.ipc_viewManager();
   global.$.ipc_viewState();
   global.$.ipc_getAppsList();
@@ -14,5 +13,4 @@ export default function () {
   global.$.ipc_nativeApps();
   global.$.ipc_windowManager();
   global.$.ipc_topbar();
-  global.$.ipc_overview();
 }

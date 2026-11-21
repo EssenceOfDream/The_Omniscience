@@ -1,5 +1,6 @@
 import electronPkg from 'electron';
 const { BrowserWindow, screen } = electronPkg;
+import path from 'path';
 import {
   enableWindowsBackdropBlur, getWindowsExplorerTaskbarBounds, recoverWindowsShell,
 } from './ipc_nativeWindows.js';
@@ -65,7 +66,7 @@ export default async function () {
     transparent: true,
     backgroundColor: '#00000000',
     webPreferences: {
-      preload: global.paths.reactPreload,
+      preload: path.join(global.paths.componentappsDir, 'topbar-panel', 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: true,
@@ -125,7 +126,7 @@ export default async function () {
       transparent: true,
       backgroundColor: '#00000000',
       webPreferences: {
-        preload: global.paths.reactPreload,
+        preload: path.join(global.paths.componentappsDir, 'window-controls', 'preload.js'),
         nodeIntegration: false,
         contextIsolation: true,
         webSecurity: true,
@@ -145,7 +146,7 @@ export default async function () {
         reportRendererFailure(`Window controls renderer exited: ${details.reason} (${details.exitCode})`);
       }
     });
-    global.controlWindow.loadURL(`${global.paths.topBarIndex}?controls=1`).catch((error) => {
+    global.controlWindow.loadURL(global.paths.windowControlsIndex).catch((error) => {
       reportRendererFailure(`Window controls load failed: ${error.message}`);
     });
     global.controlWindow.once('ready-to-show', () => {

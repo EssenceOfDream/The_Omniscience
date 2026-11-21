@@ -2,7 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
-import PowerMenu from './components/PowerMenu';
+import PowerMenu from './App.jsx';
 
 const theme = createTheme({
   palette: {

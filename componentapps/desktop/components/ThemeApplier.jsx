@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useSetting } from '../settings/useSettings';
+import { useSetting } from '../../../src/settings/useSettings';
 
 export default function ThemeApplier() {
   const enabled = useSetting('themeEnabled');

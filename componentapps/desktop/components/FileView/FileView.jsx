@@ -8,7 +8,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { motion, useMotionValue, useSpring, useTransform } from 'motion/react';
 import useDirectory from './useDirectory';
 import { useFileIcon } from './useIcons';
-import { useSetting } from '../../settings/useSettings';
+import { useSetting } from '../../../../src/settings/useSettings';
 
 /* ------------------------------------------------------------------ */
 /* Параметры кисти                                                     */

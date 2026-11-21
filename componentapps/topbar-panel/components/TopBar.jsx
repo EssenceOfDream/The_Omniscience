@@ -5,7 +5,6 @@ import SearchIcon from '@mui/icons-material/Search';
 import SettingsIcon from '@mui/icons-material/Settings';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 
-import ControlGrid from './ControlGrid';
 import Clock from './topbar/Clock';
 import WindowList from './topbar/WindowList';
 
@@ -97,16 +96,6 @@ export default function TopBar({
         </Box>
       ) : (
         <>
-          <Box sx={{
-            width: 112, flexShrink: 0,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            borderRight: '1px solid rgba(255,255,255,0.08)',
-          }}>
-            <ControlGrid
-              activeWindow={activeWindow}
-              onOpenWindowSettings={onOpenWindowSettings}
-            />
-          </Box>
           <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
             <Box sx={{
               height: 32, display: 'flex', alignItems: 'center',

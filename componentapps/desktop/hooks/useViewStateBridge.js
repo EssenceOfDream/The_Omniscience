@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { settingsStore } from '../settings/store';
+import { settingsStore } from '../../../src/settings/store';
 
 function getByPath(obj, path) {
 	if (!path) return obj;

@@ -1,5 +1,6 @@
 import electronPkg from 'electron';
-const { BrowserWindow, ipcMain, screen } = electronPkg;
+const { BrowserWindow, screen } = electronPkg;
+import path from 'node:path';
 import { attachToWebContents } from './ipc_browserContextMenu.js';
 import {
   getWindowById,
@@ -55,6 +56,7 @@ export function openOverview() {
     hasShadow: false,
     type: 'toolbar',
     webPreferences: {
+      preload: path.join(global.paths.componentappsDir, 'overview', 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: true,
@@ -98,6 +100,7 @@ export function openOverview() {
     destroyViewsForParentWindowInstance(win);
     if (getWindowById(windowRegistryId) === win) unregisterShellWindow(windowRegistryId);
     if (overviewWindow === win) overviewWindow = null;
+    if (global.overviewWindow === win) global.overviewWindow = null;
     global.topbarBroadcast?.();
   });
 
@@ -112,6 +115,7 @@ export function openOverview() {
   });
 
   overviewWindow = win;
+  global.overviewWindow = win;
   return win;
 }
 
@@ -120,6 +124,7 @@ export function closeOverview() {
   destroyViewsForParentWindowInstance(overviewWindow);
   overviewWindow.close();
   overviewWindow = null;
+  global.overviewWindow = null;
 }
 
 export function toggleOverview() {
@@ -132,12 +137,4 @@ export function toggleOverview() {
 /* ------------------------------------------------------------------ */
 
 export default function () {
-  ipcMain.handle('overview:open',    () => { openOverview();   return { ok: true }; });
-  ipcMain.handle('overview:close',   () => { closeOverview();  return { ok: true }; });
-  ipcMain.handle('overview:toggle',  () => { toggleOverview(); return { ok: true }; });
-  ipcMain.handle('overview:is-open', () => isOverviewOpen());
-
-  ipcMain.on('overview:open',   () => { try { openOverview();   } catch (e) { console.error('[overview:open]', e?.message); } });
-  ipcMain.on('overview:close',  () => { try { closeOverview();  } catch (e) { console.error('[overview:close]', e?.message); } });
-  ipcMain.on('overview:toggle', () => { try { toggleOverview(); } catch (e) { console.error('[overview:toggle]', e?.message); } });
 }
