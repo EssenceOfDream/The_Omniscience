@@ -7,3 +7,4 @@ componentapps/CODERROR/YOUR_DATA/
 gtk-bridge/daemon/gtk-bridge-daemon
 gtk-bridge/native-hook/libgtk-hook.so
 fragmenter/originals/
+.npmrc
