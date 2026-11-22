@@ -109,6 +109,15 @@ export function getWindowById(id) {
   return windows.get(id)?.win || null;
 }
 
+export function getWindowIdByWebContents(wc) {
+  for (const [id, entry] of windows) {
+    if (entry.win.webContents === wc && !entry.meta.isShell && entry.meta.kind !== 'devtools') {
+      return id;
+    }
+  }
+  return null;
+}
+
 export function getXidForWindow(id) {
   const entry = windows.get(id);
   if (!entry) return null;
@@ -126,6 +135,7 @@ export function listWindows() {
     .map(([id, entry]) => ({
       id,
       appId: entry.meta.appId,
+      kind: entry.meta.kind || 'our',
       url: entry.win.webContents.getURL(),
       title: entry.win.getTitle() || entry.meta.title || '',
       icon: entry.meta.icon || null,
@@ -137,6 +147,116 @@ export function listWindows() {
       isBridgeOverlay: !!entry.meta.isBridgeOverlay,
       daemonWindowId: entry.meta.daemonWindowId || null,
     }));
+}
+
+export function openDevToolsWindow(targetId, targetWC) {
+  if (!targetId || !targetWC || targetWC.isDestroyed()) return null;
+  if (targetWC.getType?.() === 'devtools') return null;
+
+  const id = `__devtools__:${targetWC.id}`;
+  const existing = windows.get(id)?.win;
+  if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore();
+    existing.show();
+    existing.focus();
+    return existing;
+  }
+
+  if (targetWC.isDevToolsOpened()) targetWC.closeDevTools();
+
+  const targetWindow = BrowserWindow.fromWebContents(targetWC);
+  const targetBounds = targetWindow && !targetWindow.isDestroyed()
+    ? targetWindow.getBounds()
+    : screen.getPrimaryDisplay().workArea;
+  const bounds = constrainWindowBounds({
+    x: targetBounds.x + 32,
+    y: targetBounds.y + 32,
+    width: Math.min(1000, targetBounds.width),
+    height: Math.min(720, targetBounds.height),
+  });
+  let win;
+  try {
+    win = new BrowserWindow({
+      ...bounds,
+      title: 'DevTools',
+      icon: global.paths.icon,
+      frame: false,
+      minWidth: 480,
+      minHeight: 320,
+      resizable: true,
+      movable: true,
+      minimizable: true,
+      maximizable: true,
+      closable: true,
+      focusable: true,
+      show: false,
+      skipTaskbar: false,
+      backgroundColor: '#202124',
+      webPreferences: {
+        preload: global.paths.reactPreload || undefined,
+        session: targetWC.session,
+        nodeIntegration: false,
+        contextIsolation: true,
+        backgroundColor: '#202124',
+      },
+    });
+  } catch (error) {
+    console.error('[devtools] failed to create frameless DevTools window:', error);
+    return null;
+  }
+
+  const meta = {
+    appId: 'devtools',
+    title: 'DevTools',
+    icon: null,
+    xid: null,
+    kind: 'devtools',
+    targetId,
+  };
+  windows.set(id, { win, meta });
+  attachWindowEvents(id, win);
+
+  const reattachAfterTargetRecreation = () => {
+    setImmediate(() => {
+      if (win.isDestroyed()) return;
+      const replacement = global.views?.[targetId]?.view?.webContents;
+      if (!replacement || replacement.isDestroyed() || replacement === targetWC) {
+        win.close();
+        return;
+      }
+
+      try {
+        targetWC = replacement;
+        targetWC.setDevToolsWebContents(win.webContents);
+        targetWC.openDevTools({ mode: 'detach' });
+        targetWC.once('destroyed', reattachAfterTargetRecreation);
+        win.focus();
+      } catch (error) {
+        console.error('[devtools] failed to reattach after target recreation:', error);
+        win.close();
+      }
+    });
+  };
+  targetWC.once('destroyed', reattachAfterTargetRecreation);
+  win.once('closed', () => {
+    if (!targetWC.isDestroyed() && targetWC.isDevToolsOpened()) {
+      targetWC.closeDevTools();
+    }
+  });
+
+  try {
+    targetWC.setDevToolsWebContents(win.webContents);
+    targetWC.openDevTools({ mode: 'detach' });
+    win.show();
+    win.focus();
+    meta.xid = getXid(win);
+    global.topbarBroadcast?.();
+    return win;
+  } catch (error) {
+    console.error('[devtools] failed to create frameless DevTools window:', error);
+    if (!win.isDestroyed()) win.close();
+    return null;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -550,6 +670,7 @@ export function listDevTools() {
       try {
         if (wc.getType() !== 'devtools') continue;
         if (wc.isDestroyed()) continue;
+        if ([...windows.values()].some((entry) => entry.win.webContents === wc)) continue;
 
         const owner = wc.getOwnerBrowserWindow?.();
         if (!owner || owner.isDestroyed()) continue;

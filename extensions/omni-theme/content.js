@@ -24,6 +24,7 @@
   let settings = { ...DEFAULTS };
   let started = false;
   let mutationObserver = null;
+  let stateChangeHandler = null;
 
   function readSettingsSync() {
     try {
@@ -241,10 +242,10 @@
   /*  СОСТОЯНИЕ                                                          */
   /* ================================================================== */
 
-  const processed = new WeakSet();
-  const textProcessed = new WeakSet();
-  const lastWritten = new WeakMap();
-  const pendingReprocess = new WeakMap();
+  let processed = new WeakSet();
+  let textProcessed = new WeakSet();
+  let lastWritten = new WeakMap();
+  let pendingReprocess = new WeakMap();
 
   /* ================================================================== */
   /*  ЧТЕНИЕ "СЫРЫХ" ЦВЕТОВ                                              */
@@ -294,7 +295,7 @@
   /* ================================================================== */
 
   function processElement(el) {
-    if (!el || processed.has(el)) return;
+    if (!settings.enabled || !el || processed.has(el)) return;
     if (isIgnored(el)) return;
     processed.add(el);
 
@@ -362,7 +363,7 @@
   }
 
   function processTextColor(el, myColorHint) {
-    if (!el || textProcessed.has(el)) return;
+    if (!settings.enabled || !el || textProcessed.has(el)) return;
     if (isIgnored(el)) return;
 
     const parent = el.parentElement;
@@ -423,6 +424,13 @@
 
   function runPass(el, state) {
     requestAnimationFrame(() => {
+      if (!settings.enabled) {
+        if (state.trans.v) el.style.setProperty('transition', state.trans.v, state.trans.p);
+        else el.style.removeProperty('transition');
+        pendingReprocess.delete(el);
+        return;
+      }
+
       if (!el.isConnected) {
         pendingReprocess.delete(el);
         return;
@@ -461,6 +469,7 @@
   /* ================================================================== */
 
   function startProcessing() {
+    if (!started || settings.enabled === false) return;
     document.querySelectorAll('*').forEach(processElement);
 
     mutationObserver = new MutationObserver((mutations) => {
@@ -486,20 +495,54 @@
       attributeFilter: ['style', 'class'],
     });
 
-    const onStateChange = (e) => {
-      const t = e.target;
-      if (!t || t.nodeType !== 1) return;
-      scheduleReprocess(t);
-      let p = t.parentElement, i = 0;
-      while (p && i < 3) { scheduleReprocess(p); p = p.parentElement; i++; }
-    };
+    if (!stateChangeHandler) {
+      stateChangeHandler = (e) => {
+        if (!settings.enabled) return;
+        const t = e.target;
+        if (!t || t.nodeType !== 1) return;
+        scheduleReprocess(t);
+        let p = t.parentElement, i = 0;
+        while (p && i < 3) { scheduleReprocess(p); p = p.parentElement; i++; }
+      };
 
-    document.addEventListener('pointerover', onStateChange, true);
-    document.addEventListener('pointerout',  onStateChange, true);
-    document.addEventListener('pointerdown', onStateChange, true);
-    document.addEventListener('pointerup',   onStateChange, true);
-    document.addEventListener('focusin',     onStateChange, true);
-    document.addEventListener('focusout',    onStateChange, true);
+      document.addEventListener('pointerover', stateChangeHandler, true);
+      document.addEventListener('pointerout',  stateChangeHandler, true);
+      document.addEventListener('pointerdown', stateChangeHandler, true);
+      document.addEventListener('pointerup',   stateChangeHandler, true);
+      document.addEventListener('focusin',     stateChangeHandler, true);
+      document.addEventListener('focusout',    stateChangeHandler, true);
+    }
+  }
+
+  function stop() {
+    if (!started) return;
+    started = false;
+    mutationObserver?.disconnect();
+    mutationObserver = null;
+
+    document.querySelectorAll('*').forEach((el) => {
+      removeOurInlineOverrides(el);
+      for (let i = el.style.length - 1; i >= 0; i--) {
+        const property = el.style[i];
+        if (property.startsWith('--TheOmniscience-')) el.style.removeProperty(property);
+      }
+    });
+
+    for (const property of [
+      '--TheOmniscience-max-r',
+      '--TheOmniscience-max-g',
+      '--TheOmniscience-max-b',
+      '--TheOmniscience-target-alpha',
+      '--TheOmniscience-text-brightness',
+      '--TheOmniscience-blur-shadow',
+    ]) {
+      document.documentElement.style.removeProperty(property);
+    }
+
+    processed = new WeakSet();
+    textProcessed = new WeakSet();
+    lastWritten = new WeakMap();
+    pendingReprocess = new WeakMap();
   }
 
   function start() {
@@ -528,7 +571,10 @@
     const next = e && e.detail;
     if (!next) return;
     settings = Object.assign({}, DEFAULTS, next);
-    if (settings.enabled === false) return;
+    if (settings.enabled === false) {
+      stop();
+      return;
+    }
     if (!started) start();
     else applyVariables();
   });

@@ -1,12 +1,38 @@
 import electronPkg from 'electron';
-const { WebContentsView, ipcMain } = electronPkg;
+const { WebContentsView, app, ipcMain, webContents } = electronPkg;
 import { attachToWebContents } from './ipc_browserContextMenu.js';
-import { getWindowById } from './ipc_windowManager.js';
+import {
+    getWindowById,
+    getWindowIdByWebContents,
+    openDevToolsWindow,
+} from './ipc_windowManager.js';
 import {
     getViewIdsForParentWindowInstance,
     getOverviewSiblingViewIds,
     resolveViewParent,
 } from './viewLifecycle.js';
+
+function attachDetachedDevToolsShortcut(wc) {
+    if (!wc || wc.isDestroyed()) return;
+    if (wc.__omniDetachedDevToolsShortcut) return;
+    wc.__omniDetachedDevToolsShortcut = true;
+
+    wc.on('before-input-event', (event, input) => {
+        if (input.type !== 'keyDown') return;
+        if (wc.__omniDevToolsView) return;
+        if (wc.getType?.() === 'devtools') return;
+
+        const ctrl = input.control || input.meta;
+        if (!ctrl || !input.shift || input.alt || input.code !== 'KeyI') return;
+
+        const viewId = findIdByWebContents(wc.id);
+        const windowId = viewId || getWindowIdByWebContents(wc);
+        if (!windowId) return;
+
+        event.preventDefault();
+        openDevToolsWindow(windowId, wc);
+    });
+}
 
 /* ------------------------------------------------------------------ */
 /* Резолвер родительского окна                                         */
@@ -132,6 +158,7 @@ export function createView(id, {
     global.views[id] = entry;
     parentWindow.contentView.addChildView(view);
     hookParentCleanup(parentWindow);
+    attachDetachedDevToolsShortcut(view.webContents);
 
     // Навигационные события — только для окон
     if (kind === 'window') {
@@ -284,6 +311,13 @@ function sendToShell(channel, data) {
 export default function () {
     global.views = {};
     if (global.themeEnabled === undefined) global.themeEnabled = true;
+
+    for (const wc of webContents.getAllWebContents()) {
+        attachDetachedDevToolsShortcut(wc);
+    }
+    app.on('web-contents-created', (_event, wc) => {
+        attachDetachedDevToolsShortcut(wc);
+    });
 
     /* -------- Универсальные операции -------- */
 
@@ -457,9 +491,11 @@ export default function () {
         const targetWC = targetEntry.view?.webContents;
         if (!devtoolsWC || !targetWC) return;
 
+        devtoolsWC.__omniDevToolsView = true;
         if (targetWC.isDevToolsOpened()) targetWC.closeDevTools();
         targetWC.setDevToolsWebContents(devtoolsWC);
         targetWC.openDevTools({ mode: 'detach' });
+        devtoolsWC.focus();
         console.log('[devtools:attach] ok:', devtoolsViewId, '→', targetViewId);
     });
 

@@ -143,6 +143,18 @@ export default async function () {
     console.error('[preloads] chrome-extensions preload not found:', err.message);
   }
 
+  let themeContentCode = '';
+  try {
+    themeContentCode = await readFile(
+      path.join(global.paths.extensionsDir, 'omni-theme', 'content.js'),
+      'utf-8'
+    );
+  } catch (err) {
+    console.warn('[preloads] Omni Theme content script not found:', err.message);
+  }
+  const themePreloadCode = (global._.theme_preload || '')
+    .replace('__OMNI_THEME_CONTENT__', JSON.stringify(themeContentCode));
+
   // Генерируем блок маскировки
   const stealthEvasionsCode = await buildStealthEvasionsBlock();
 
@@ -154,6 +166,7 @@ export default async function () {
     buildInjectStylesFunction(BASE_CSS),
     global._.mainWindow_ipc,
     global._.desktop_ipc,
+    themePreloadCode,
     global._.view_state_ipc,
     global._.react_devtools_backend,
     global._.devtools_ipc,

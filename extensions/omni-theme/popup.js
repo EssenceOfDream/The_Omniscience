@@ -139,6 +139,7 @@ async function load() {
 function save(field, value) {
   writeToChromeStorage({ [field]: value });
   writeToOmni(field, value);
+  window.electron_theme_API?.updateSetting(field, value);
 }
 
 document.getElementById('enabled').addEventListener('change', (e) => {

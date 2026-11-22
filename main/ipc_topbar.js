@@ -10,6 +10,7 @@ import {
   getWindowById,
   createWindowByRequest,
   listDevTools,
+  openDevToolsWindow,
   registerOwnWindow,
   unregisterOwnWindow,
   registerShellWindow,
@@ -104,7 +105,7 @@ export function buildTopbarState() {
     return {
       id: w.id,
       xid,
-      kind: 'our',
+      kind: w.kind || 'our',
       title: w.title || '',
       icon: w.icon || null,
       maximized: !!w.maximized,
@@ -116,7 +117,7 @@ export function buildTopbarState() {
       isBridgeOverlay: false,
       daemonWindowId: null,
       gtkXid: null,
-      isDevTools: false,
+      isDevTools: w.kind === 'devtools',
       ownerId: null,
       pid: null,
       parentXid: null,
@@ -508,10 +509,10 @@ export default function () {
   });
 
   ipcMain.on('topbar:open-devtools', (_e, { id }) => {
-    if (!id) return;
+    if (!id || String(id).startsWith('__devtools__:')) return;
     const win = getWindowById(id);
     if (!win) return;
-    win.webContents.openDevTools({ mode: 'detach' });
+    openDevToolsWindow(id, global.views?.[id]?.view?.webContents || win.webContents);
   });
 
   ipcMain.handle('window-settings:get', (_e, { id }) => getWindowData(id));

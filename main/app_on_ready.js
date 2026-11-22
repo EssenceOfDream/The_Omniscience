@@ -58,8 +58,8 @@ export default async function () {
   global.$.userAgent_change();
 
   await global.$.texts_load();
-  await global.$.extensions_setup();
   await global.$.preloads_generate();
+  await global.$.extensions_setup();
   await global.$.mainWindow_create();
   await global.$.ipc_setup();
   try {
