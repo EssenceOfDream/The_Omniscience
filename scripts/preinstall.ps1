@@ -14,6 +14,19 @@ if ($isElevated) {
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $bin = Join-Path $projectRoot "fragmenter/originals"
 
+# --- 1. Install Windows App Runtime ---
+$runtimeInstaller = Join-Path $bin "WindowsAppRuntimeInstall-1.8.12-x64.exe"
+if (-not (Test-Path $runtimeInstaller)) {
+    throw "Windows App Runtime installer was not found: $runtimeInstaller"
+}
+
+Write-Host "Installing Windows App Runtime 1.8..." -ForegroundColor Cyan
+& $runtimeInstaller --quiet
+if ($LASTEXITCODE -ne 0) {
+    throw "Windows App Runtime installation failed with exit code $LASTEXITCODE."
+}
+Write-Host "Windows App Runtime 1.8 installed." -ForegroundColor Green
+
 # --- 2. Locate Winget ---
 $aliasDir = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"
 $aliasExe = Join-Path $aliasDir "winget.exe"

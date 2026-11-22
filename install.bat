@@ -28,7 +28,7 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo [3/6] Running preinstall setup. UAC will be requested...
+echo [3/6] Running preinstall setup, including Windows App Runtime 1.8...
 call powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\preinstall.ps1"
 if %errorlevel% neq 0 (
     echo.
