@@ -199,7 +199,11 @@ try {
             $null
         }
         if ($null -ne $existing -and $existing -cne $runCommand) {
-            throw "An unrelated Windows startup entry named $runName already exists; it was not overwritten."
+            $belongsToThisProject = $existing.IndexOf($projectRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            if (-not $belongsToThisProject) {
+                throw "An unrelated Windows startup entry named $runName already exists; it was not overwritten."
+            }
+            Write-Output 'Migrating the existing Omniscience startup entry to the current process-host format.'
         }
 
         Set-TaskbarTopAndVisible

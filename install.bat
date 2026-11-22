@@ -1,6 +1,7 @@
 @echo off
 chcp 65001 >nul
 setlocal
+cd /d "%~dp0"
 
 echo ============================================
 echo  The Omniscience: Installation
@@ -19,6 +20,12 @@ if %errorlevel% neq 0 (
 echo.
 echo [2/6] Assembling large files from fragments...
 call npm run sync
+if %errorlevel% neq 0 (
+    echo.
+    echo ERROR: Fragment assembly failed. Installation aborted.
+    pause
+    exit /b %errorlevel%
+)
 
 echo.
 echo [3/6] Running preinstall setup. UAC will be requested...
@@ -45,7 +52,7 @@ echo [5/6] Compiling Bluetooth module for Electron...
 call node "%~dp0scripts\postinstall.js"
 if %errorlevel% neq 0 (
     echo.
-    echo ERROR: Postinstall. native compilation failed. Installation aborted.
+    echo ERROR: Postinstall. Native compilation failed. Installation aborted.
     pause
     exit /b %errorlevel%
 )
