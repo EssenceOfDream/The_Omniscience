@@ -1,5 +1,5 @@
 const electron = require('electron');
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell } = electron;
+const { app, Tray, Menu, nativeImage, shell } = electron;
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -17,7 +17,9 @@ const statusState = {
 let child = null;
 let intentionalChildStop = false;
 let tray = null;
-let statusWindow = null;
+let trayMenu = null;
+let trayMenuOpen = false;
+let reopenTrayMenuAfterClose = false;
 let fallbackScanTimer = null;
 let restartTimer = null;
 let changeTimer = null;
@@ -89,48 +91,50 @@ function updateTray() {
   tray.setToolTip(count
     ? `Omniscience: ${count} uncommitted source changes`
     : 'Omniscience: no source changes');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Открыть состояние', click: openStatusWindow },
+  trayMenu = Menu.buildFromTemplate([
+    {
+      label: statusState.busy || (count
+        ? `Есть неприменённые изменения: ${count}`
+        : 'Изменений не обнаружено'),
+      enabled: false,
+    },
+    { type: 'separator' },
     { label: 'Пересобрать и применить', enabled: count > 0 && !statusState.busy, click: applyChanges },
     { label: 'Перезагрузить интерфейсы', enabled: !statusState.busy, click: reloadRenderers },
     { label: 'Полный перезапуск', enabled: !statusState.busy, click: restartOmniscience },
     { type: 'separator' },
     { label: 'Открыть папку проекта', click: () => shell.openPath(projectRoot) },
-  ]));
+    { type: 'separator' },
+    { label: 'Закрыть Omniscience', click: () => app.quit() },
+  ]);
+  trayMenu.on('menu-will-show', () => { trayMenuOpen = true; });
+  trayMenu.on('menu-will-close', () => {
+    trayMenuOpen = false;
+    if (process.platform === 'win32' && tray && !tray.isDestroyed()) tray.focus();
+    if (reopenTrayMenuAfterClose) {
+      reopenTrayMenuAfterClose = false;
+      setImmediate(showTrayMenu);
+    }
+  });
+  tray.setContextMenu(trayMenu);
   if (child && child.connected) {
     child.send({ type: 'host-status', status: getStatus() });
   }
 }
 
-function openStatusWindow() {
-  if (statusWindow && !statusWindow.isDestroyed()) {
-    statusWindow.show();
-    statusWindow.focus();
+function showTrayMenu() {
+  if (!tray || tray.isDestroyed() || !trayMenu) return;
+  if (trayMenuOpen) {
+    reopenTrayMenuAfterClose = true;
+    tray.closeContextMenu();
     return;
   }
-
-  statusWindow = new BrowserWindow({
-    width: 760,
-    height: 520,
-    title: 'Omniscience Development Host',
-    icon: path.join(projectRoot, 'icon.ico'),
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'processHostPreload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-  statusWindow.loadFile(path.join(__dirname, 'processHostStatus.html'));
-  statusWindow.on('closed', () => { statusWindow = null; });
+  tray.popUpContextMenu(trayMenu);
 }
 
 function setBusy(value) {
   statusState.busy = value;
   updateTray();
-  if (statusWindow && !statusWindow.isDestroyed()) {
-    statusWindow.webContents.send('host:status-updated', getStatus());
-  }
 }
 
 function getStatus() {
@@ -362,6 +366,21 @@ function reloadRenderers() {
   return { ok: true };
 }
 
+async function runHostAction(action) {
+  if (action === 'apply') return applyChanges();
+  if (action === 'reload') return reloadRenderers();
+  if (action === 'restart') return restartOmniscience();
+  if (action === 'close') {
+    setImmediate(() => app.quit());
+    return { ok: true };
+  }
+  if (action === 'open-project') {
+    const error = await shell.openPath(projectRoot);
+    return error ? { ok: false, error } : { ok: true };
+  }
+  return { ok: false, error: 'Неизвестное действие хоста' };
+}
+
 async function restartOmniscience(skipBuild = false) {
   if (statusState.busy && statusState.busy !== 'Перезапуск Omniscience...') {
     return { ok: false, error: 'Host is already busy' };
@@ -404,7 +423,24 @@ function startChild() {
   statusState.childPid = child.pid || null;
   child.on('message', (message) => {
     if (message?.type === 'omniscience-ready') updateTray();
-    if (message?.type === 'open-status') openStatusWindow();
+    if (message?.type === 'host-action') {
+      const requestChild = child;
+      const respond = (result) => {
+        if (!requestChild?.connected) return;
+        try {
+          requestChild.send({
+            type: 'host-action-result',
+            requestId: message.requestId,
+            result,
+          });
+        } catch (error) {
+          console.error('[process-host] failed to return action result:', error.message);
+        }
+      };
+      runHostAction(message.action).then(respond, (error) => {
+        respond({ ok: false, error: error instanceof Error ? error.message : String(error) });
+      });
+    }
   });
   child.on('error', (error) => {
     statusState.lastError = error.message;
@@ -429,15 +465,8 @@ if (!gotLock) {
     const icon = nativeImage.createFromPath(path.join(projectRoot, 'icon.ico'));
     tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
     tray.setToolTip('Omniscience Development Host');
-    tray.on('click', openStatusWindow);
-    tray.on('double-click', openStatusWindow);
+    tray.on('click', showTrayMenu);
     updateTray();
-
-    ipcMain.handle('host:get-status', () => getStatus());
-    ipcMain.handle('host:apply', () => applyChanges());
-    ipcMain.handle('host:reload-renderers', () => reloadRenderers());
-    ipcMain.handle('host:restart', () => restartOmniscience());
-    ipcMain.handle('host:open-project', () => shell.openPath(projectRoot));
 
     snapshot = await createSnapshot();
     startSourceWatcher();
