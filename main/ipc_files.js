@@ -13,6 +13,8 @@ import path from 'path';
 import os from 'os';
 import { decodeDesktopIni, parseDesktopIni } from './desktopIni.js';
 import { isWithinDesktopTree, mergeDesktopEntries } from './desktopEntries.js';
+import { getWindowsShortcutIconSources, parseWindowsUrlShortcut } from './windowsShortcut.js';
+import { extractWindowsIcons } from './windowsShortcutIcons.js';
 
 const execFileAsync = promisify(execFile);
 const yieldToEventLoop = () => new Promise((r) => setImmediate(r));
@@ -735,6 +737,7 @@ export async function startNativeDrag(event, paths) {
 const themeIndexCache = new Map();
 const iconLookupCache = new Map();
 const iconByNameCache = new Map();
+const DIRECT_ICON_EXTENSIONS = new Set(['.bmp', '.gif', '.ico', '.jpeg', '.jpg', '.png', '.svg', '.webp']);
 
 let themePromise = null;
 let themeTimestamp = 0;
@@ -991,17 +994,65 @@ async function getFileIcon(filePath) {
                 return cached ? { success: true, fileUrl: cached } : { success: false };
             }
 
-            const candidates = [filePath];
-            if (path.extname(filePath).toLowerCase() === '.lnk') {
+            const extension = path.extname(filePath).toLowerCase();
+            let sources = [];
+            if (extension === '.lnk') {
                 try {
                     const shortcut = shell.readShortcutLink(filePath);
-                    candidates.unshift(shortcut.icon, shortcut.target);
+                    sources = getWindowsShortcutIconSources(filePath, shortcut);
                 } catch (err) {
                     console.warn('[icon] failed to read Windows shortcut:', filePath, err.message);
                 }
-            }
-            for (const candidate of new Set(candidates.filter(Boolean))) {
+            } else if (extension === '.url') {
                 try {
+                    const shortcut = parseWindowsUrlShortcut(await readFile(filePath), filePath);
+                    if (shortcut.iconLocation) sources = [shortcut.iconLocation];
+                } catch (err) {
+                    console.warn('[icon] failed to read Windows URL shortcut:', filePath, err.message);
+                }
+            }
+
+            for (const source of sources) {
+                if (!DIRECT_ICON_EXTENSIONS.has(path.extname(source.path).toLowerCase())) continue;
+                try {
+                    const image = nativeImage.createFromPath(source.path);
+                    if (!image.isEmpty()) {
+                        const fileUrl = image.toDataURL();
+                        iconLookupCache.set(cacheKey, fileUrl);
+                        return { success: true, fileUrl };
+                    }
+                } catch (err) {
+                    console.warn('[icon] failed to read shortcut image:', source.path, err.message);
+                }
+            }
+
+            let extractedIcons = new Map();
+            try {
+                extractedIcons = await extractWindowsIcons(
+                    sources.map((source, index) => ({
+                        id: String(index),
+                        path: source.path,
+                        iconIndex: source.iconIndex,
+                    })),
+                );
+            } catch (err) {
+                console.error('[icon] Windows shortcut icon extraction failed:', err.message);
+            }
+            for (let index = 0; index < sources.length; index++) {
+                const result = extractedIcons.get(String(index));
+                if (result?.error) {
+                    console.warn('[icon] failed to extract shortcut icon resource:', sources[index].path, result.error);
+                }
+                if (result?.dataUrl) {
+                    iconLookupCache.set(cacheKey, result.dataUrl);
+                    return { success: true, fileUrl: result.dataUrl };
+                }
+            }
+
+            const candidates = [...new Set([...sources.map((source) => source.path), filePath])];
+            for (const candidate of candidates) {
+                try {
+                    await access(candidate);
                     const image = await app.getFileIcon(candidate, { size: 'large' });
                     if (image && !image.isEmpty()) {
                         const fileUrl = image.toDataURL();
@@ -1009,7 +1060,9 @@ async function getFileIcon(filePath) {
                         return { success: true, fileUrl };
                     }
                 } catch (err) {
-                    console.warn('[icon] Windows icon lookup failed:', candidate, err.message);
+                    if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') {
+                        console.warn('[icon] Windows icon lookup failed:', candidate, err.message);
+                    }
                 }
             }
             iconLookupCache.set(cacheKey, null);

@@ -1,5 +1,5 @@
 import electronPkg from 'electron';
-const { app, ipcMain, shell } = electronPkg;
+const { app, ipcMain, shell, nativeImage } = electronPkg;
 import { readdir, readFile, access } from 'fs/promises';
 import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
@@ -7,6 +7,12 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { isWindowsUwpAppUserModelId, parseWindowsUwpApps } from './windowsUwpApps.js';
+import {
+  getWindowsShortcutIconCandidates,
+  getWindowsShortcutIconSources,
+  parseWindowsUrlShortcut,
+} from './windowsShortcut.js';
+import { extractWindowsIcons } from './windowsShortcutIcons.js';
 
 const execFileAsync = promisify(execFile);
 const WINDOWS_UWP_HOST_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), 'windowsUwpHost.ps1');
@@ -151,7 +157,93 @@ function cleanExec(exec) {
 
 let cachedNativeApps = null;
 
-async function collectShortcuts(dir, result, seen) {
+const DIRECT_ICON_EXTENSIONS = new Set(['.bmp', '.gif', '.ico', '.jpeg', '.jpg', '.png', '.svg', '.webp']);
+
+function getDirectIconDataUrl(filePath) {
+  if (!DIRECT_ICON_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return null;
+  const image = nativeImage.createFromPath(filePath);
+  return image.isEmpty() ? null : image.toDataURL();
+}
+
+async function populateShortcutIcons(iconJobs) {
+  const requests = [];
+  const requestIds = new Map();
+  for (const job of iconJobs) {
+    job.requestIds = new Map();
+    for (const source of job.sources) {
+      try {
+        await access(source.path);
+      } catch (err) {
+        if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') {
+          console.warn('[nativeApps] cannot access shortcut icon source:', source.path, err.message);
+        }
+        continue;
+      }
+
+      try {
+        const directIcon = getDirectIconDataUrl(source.path);
+        if (directIcon) {
+          job.app.icon = directIcon;
+          break;
+        }
+      } catch (err) {
+        console.warn('[nativeApps] failed to read icon file:', source.path, err.message);
+      }
+
+      const sourceKey = `${source.path.toLowerCase()}|${source.iconIndex}`;
+      let requestId = requestIds.get(sourceKey);
+      if (requestId == null) {
+        requestId = String(requests.length);
+        requestIds.set(sourceKey, requestId);
+        requests.push({ id: requestId, path: source.path, iconIndex: source.iconIndex });
+      }
+      job.requestIds.set(sourceKey, requestId);
+    }
+  }
+
+  let extractedIcons = new Map();
+  try {
+    extractedIcons = await extractWindowsIcons(requests);
+    const requestPaths = new Map(requests.map((request) => [request.id, request.path]));
+    for (const [id, result] of extractedIcons) {
+      if (result.error) {
+        console.warn('[nativeApps] failed to extract icon resource:', requestPaths.get(id), result.error);
+      }
+    }
+  } catch (err) {
+    console.error('[nativeApps] Windows icon extraction failed:', err.message);
+  }
+
+  for (const job of iconJobs) {
+    if (job.app.icon) continue;
+    for (const source of job.sources) {
+      const key = `${source.path.toLowerCase()}|${source.iconIndex}`;
+      const result = extractedIcons.get(job.requestIds.get(key));
+      if (result?.dataUrl) {
+        job.app.icon = result.dataUrl;
+        break;
+      }
+    }
+    if (job.app.icon) continue;
+
+    for (const candidate of job.fallbackCandidates) {
+      try {
+        await access(candidate);
+        const image = await app.getFileIcon(candidate, { size: 'normal' });
+        if (!image.isEmpty()) {
+          job.app.icon = image.toDataURL();
+          break;
+        }
+      } catch (err) {
+        if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') {
+          console.warn('[nativeApps] failed to read shortcut icon:', candidate, err.message);
+        }
+      }
+    }
+  }
+}
+
+async function collectShortcuts(dir, result, seen, iconJobs) {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -165,10 +257,11 @@ async function collectShortcuts(dir, result, seen) {
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      await collectShortcuts(fullPath, result, seen);
+      await collectShortcuts(fullPath, result, seen, iconJobs);
       continue;
     }
-    if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.lnk') continue;
+    const extension = path.extname(entry.name).toLowerCase();
+    if (!entry.isFile() || (extension !== '.lnk' && extension !== '.url')) continue;
 
     const key = fullPath.toLowerCase();
     if (seen.has(key)) continue;
@@ -176,36 +269,41 @@ async function collectShortcuts(dir, result, seen) {
 
     let title = path.basename(entry.name, path.extname(entry.name));
     let shortcut = null;
-    try {
-      shortcut = shell.readShortcutLink(fullPath);
-      title = shortcut.description || title;
-    } catch { /* malformed or inaccessible shortcut */ }
-
-    let icon = null;
-    const iconCandidates = [...new Set([shortcut?.icon, shortcut?.target, fullPath].filter(Boolean))];
-    for (const candidate of iconCandidates) {
+    if (extension === '.lnk') {
       try {
-        const image = await app.getFileIcon(candidate, { size: 'normal' });
-        if (!image.isEmpty()) {
-          icon = image.toDataURL();
-          break;
-        }
+        shortcut = shell.readShortcutLink(fullPath);
+        title = shortcut.description || title;
+      } catch { /* malformed or inaccessible shortcut */ }
+    } else {
+      try {
+        shortcut = parseWindowsUrlShortcut(await readFile(fullPath), fullPath);
       } catch (err) {
-        console.warn('[nativeApps] failed to read shortcut icon:', candidate, err.message);
+        console.warn('[nativeApps] failed to read URL shortcut:', fullPath, err.message);
       }
     }
 
-    result.push({
+    const appEntry = {
       id: `native:${key}`,
       nativeId: fullPath,
       title,
-      icon,
+      icon: null,
       kind: 'native',
       exec: fullPath,
       terminal: false,
       comment: '',
       categories: '',
       fullPath
+    };
+    result.push(appEntry);
+    const sources = extension === '.url'
+      ? (shortcut?.iconLocation ? [shortcut.iconLocation] : [])
+      : getWindowsShortcutIconSources(fullPath, shortcut);
+    iconJobs.push({
+      app: appEntry,
+      sources,
+      fallbackCandidates: extension === '.url'
+        ? [...sources.map((source) => source.path), fullPath]
+        : getWindowsShortcutIconCandidates(fullPath, shortcut),
     });
   }
 }
@@ -213,12 +311,14 @@ async function collectShortcuts(dir, result, seen) {
 async function scanWindowsShortcuts() {
   const result = [];
   const seen = new Set();
+  const iconJobs = [];
   const startMenu = path.join('Microsoft', 'Windows', 'Start Menu', 'Programs');
   const dirs = [
     path.join(app.getPath('appData'), startMenu),
     path.join(process.env.ProgramData || 'C:\\ProgramData', startMenu),
   ];
-  for (const dir of dirs) await collectShortcuts(dir, result, seen);
+  for (const dir of dirs) await collectShortcuts(dir, result, seen, iconJobs);
+  await populateShortcutIcons(iconJobs);
 
   try {
     const { stdout } = await execFileAsync(POWERSHELL_PATH, [
