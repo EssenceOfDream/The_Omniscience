@@ -13,6 +13,7 @@ export default function TopBarContainer() {
     isWindowsPanel: new URLSearchParams(window.location.search).has('windows')
       && !new URLSearchParams(window.location.search).has('windowId'),
     overviewOpen: false,
+    developmentStatus: null,
   });
 
   useEffect(() => {
@@ -51,6 +52,8 @@ export default function TopBarContainer() {
         onRequestSearch={() => send('topbar:open-search')}
         onRequestSettings={() => send('topbar:open-settings')}
         onRequestLogout={() => send('topbar:toggle-power-menu')}
+        onOpenDevelopmentHost={() => send('host:open-status')}
+        developmentStatus={state.developmentStatus}
       />
     </Box>
   );

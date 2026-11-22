@@ -42,6 +42,31 @@ function collectOutputFiles(dir, rootDir = dir) {
   return files;
 }
 
+function copyComponentappResources(componentappsDir, distDir) {
+  if (!fs.existsSync(componentappsDir)) return;
+
+  for (const entry of fs.readdirSync(componentappsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+
+    const appDir = path.join(componentappsDir, entry.name);
+    const destDir = path.join(distDir, 'componentapps', entry.name);
+    fs.cpSync(appDir, destDir, {
+      recursive: true,
+      force: true,
+      filter(source) {
+        const relativePath = path.relative(appDir, source);
+        if (!relativePath) return true;
+        if (relativePath === 'index.html') return false;
+        if (relativePath === 'node_modules'
+          || relativePath.startsWith(`node_modules${path.sep}`)
+          || relativePath === '.git'
+          || relativePath.startsWith(`.git${path.sep}`)) return false;
+        return true;
+      },
+    });
+  }
+}
+
 function isBuildCacheValid(cache, fingerprint, distDir) {
   return cache?.fingerprint === fingerprint
     && Array.isArray(cache.outputs)
@@ -155,6 +180,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             const dest = path.join(distDir, 'webapps');
             fs.cpSync(webappsDir, dest, { recursive: true });
           }
+          copyComponentappResources(componentappsDir, distDir);
         },
       },
     ],

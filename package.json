@@ -1,11 +1,11 @@
 {
   "name": "The_Omniscience",
-  "version": "12.4.0",
+  "version": "12.5.0",
   "type": "module",
   "main": "index.mjs",
   "scripts": {
     "sync": "node fragmenter/index.js",
-    "start": "npx electron .",
+    "start": "npx electron ./main/processHost.cjs",
     "windows:setup": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\\main\\manageWindowsAutostart.ps1 -Action Install",
     "windows:setup:restore": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\\main\\manageWindowsAutostart.ps1 -Action Restore",
     "windows:legacy-shell:restore": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\\main\\manageWindowsShell.ps1 -Action Restore"

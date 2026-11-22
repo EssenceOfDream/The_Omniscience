@@ -15,7 +15,8 @@ $projectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $electronPath = Join-Path $projectRoot 'node_modules\electron\dist\electron.exe'
 $runPath = 'Software\Microsoft\Windows\CurrentVersion\Run'
 $runName = 'The_Omniscience'
-$runCommand = '"' + $electronPath + '" "' + $projectRoot + '"'
+$hostPath = Join-Path $projectRoot 'main\processHost.cjs'
+$runCommand = '"' + $electronPath + '" "' + $hostPath + '"'
 
 function Set-TaskbarTopAndVisible {
     $settingsPath = 'Software\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3'

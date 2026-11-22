@@ -176,6 +176,7 @@ export function buildTopbarState() {
     showClock: cfg.showClock ?? true,
     showClockMs: cfg.showClockMs ?? false,
     overviewOpen: isOverviewOpen(),
+    developmentStatus: global.developmentStatus || null,
   };
 }
 

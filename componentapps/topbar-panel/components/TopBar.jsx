@@ -4,6 +4,7 @@ import MenuIcon from '@mui/icons-material/Menu';
 import SearchIcon from '@mui/icons-material/Search';
 import SettingsIcon from '@mui/icons-material/Settings';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
+import DeveloperModeIcon from '@mui/icons-material/DeveloperMode';
 
 import Clock from './topbar/Clock';
 import WindowList from './topbar/WindowList';
@@ -23,6 +24,8 @@ export default function TopBar({
   onRequestSearch,
   onRequestSettings,
   onRequestLogout,
+  onOpenDevelopmentHost,
+  developmentStatus,
 }) {
   const menuButton = (
     <Button
@@ -58,6 +61,20 @@ export default function TopBar({
         title="Параметры"
         sx={{ color: '#fff', WebkitAppRegion: 'no-drag', width: 24, height: 24 }}>
         <SettingsIcon sx={{ fontSize: 14 }} />
+      </IconButton>
+      <IconButton size="small" onClick={onOpenDevelopmentHost}
+        aria-label="Разработка Omniscience"
+        title={developmentStatus?.changed?.length
+          ? `Неприменённых изменений: ${developmentStatus.changed.length}`
+          : 'Omniscience: изменений нет'}
+        sx={{
+          color: developmentStatus?.lastError ? '#ff6b6b'
+            : developmentStatus?.busy ? '#64b5f6'
+            : developmentStatus?.changed?.length ? '#ffd166'
+            : '#8bc34a',
+          WebkitAppRegion: 'no-drag', width: 24, height: 24,
+        }}>
+        <DeveloperModeIcon sx={{ fontSize: 14 }} />
       </IconButton>
       <IconButton size="small" onClick={onRequestLogout}
         aria-label="Меню питания"

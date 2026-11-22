@@ -117,7 +117,8 @@ try {
             throw "Electron was not found at $electronPath. Run npm install first."
         }
 
-        $command = '"' + $hostPath + '" --executable "' + $electronPath + '" --app-path "' + $projectRoot + '"'
+        $processHostPath = Join-Path $projectRoot 'main\processHost.cjs'
+        $command = '"' + $hostPath + '" --executable "' + $electronPath + '" --app-path "' + $processHostPath + '"'
         $original = Get-RegistrySnapshot $winlogonKey 'Shell'
         $originalPolicyShell = if ($null -ne $machinePolicyKey) {
             Get-RegistrySnapshot $machinePolicyKey 'Shell'

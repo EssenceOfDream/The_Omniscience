@@ -4,7 +4,7 @@ import {
   TableContainer, TableHead, TableRow, TextField, Alert,
 } from '@mui/material';
 
-const IMG_BASE = '../../../componentapps/crossout-calc/images/';
+const IMG_BASE = './images/';
 
 const DEFAULT_RESOURCES = [
   { id: 'scrap',       name: 'Лом',         img: 'scrap_metal.png', price: 0, packSize: 100 },

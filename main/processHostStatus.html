@@ -1,0 +1,83 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Omniscience Development Host</title>
+  <style>
+    :root { color-scheme: dark; font-family: Segoe UI, sans-serif; }
+    body { margin: 0; background: #17151c; color: #f4eff8; }
+    main { padding: 22px; }
+    h1 { margin: 0 0 16px; font-size: 20px; }
+    #status { margin-bottom: 14px; color: #d0c7d7; }
+    #changes { max-height: 310px; overflow: auto; border: 1px solid #3a3540; border-radius: 8px; }
+    .change { display: grid; grid-template-columns: 92px 1fr; gap: 12px; padding: 8px 10px; border-bottom: 1px solid #302b35; }
+    .change:last-child { border-bottom: 0; }
+    .category { color: #bda7d1; font-weight: 600; }
+    .empty { padding: 16px; color: #99909f; }
+    .actions { display: flex; gap: 8px; margin-top: 14px; }
+    button { border: 1px solid #5d4c69; background: #2a2530; color: white; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+    button.primary { background: #6f42c1; border-color: #8b64d4; }
+    button:disabled { opacity: .45; cursor: default; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Omniscience</h1>
+    <div id="status">Проверка изменений...</div>
+    <div id="changes"></div>
+    <div class="actions">
+      <button id="apply" class="primary">Пересобрать и применить</button>
+      <button id="reload">Перезагрузить интерфейсы</button>
+      <button id="restart">Полный перезапуск</button>
+      <button id="project">Папка проекта</button>
+    </div>
+  </main>
+  <script>
+    const api = window.omniscienceHostAPI;
+    const status = document.getElementById('status');
+    const changes = document.getElementById('changes');
+    const apply = document.getElementById('apply');
+    const reload = document.getElementById('reload');
+    const restart = document.getElementById('restart');
+
+    async function refresh() {
+      const data = await api.getStatus();
+      status.textContent = data.busy
+        ? data.busy
+        : data.changed.length
+          ? `Есть неприменённые изменения: ${data.changed.length}`
+          : 'Изменений не обнаружено';
+      changes.innerHTML = '';
+      if (!data.changed.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'Список изменений пуст';
+        changes.appendChild(empty);
+      } else {
+        for (const item of data.changed) {
+          const row = document.createElement('div');
+          row.className = 'change';
+          row.innerHTML = `<span class="category">${escapeHtml(item.category)}</span><span>${escapeHtml(item.path)} · ${item.type}</span>`;
+          changes.appendChild(row);
+        }
+      }
+      apply.disabled = data.busy || !data.changed.length;
+      reload.disabled = !!data.busy;
+      restart.disabled = !!data.busy;
+    }
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[char]));
+    }
+
+    apply.addEventListener('click', async () => { await api.apply(); refresh(); });
+    reload.addEventListener('click', async () => { await api.reload(); refresh(); });
+    restart.addEventListener('click', async () => { await api.restart(); refresh(); });
+    document.getElementById('project').addEventListener('click', () => api.openProject());
+    setInterval(refresh, 1000);
+    refresh();
+  </script>
+</body>
+</html>
