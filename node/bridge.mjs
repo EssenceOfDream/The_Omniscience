@@ -1,7 +1,16 @@
 import { createReadStream } from 'node:fs';
 import { createServer } from 'node:http';
 import { execFile, spawn } from 'node:child_process';
-import { lstat, mkdir, open, readFile, readdir, rename, stat } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -10,9 +19,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { startWindowsNativeHost } from './windows-native-host.mjs';
 import { openEverything } from '../main/everythingSearch.js';
 import { isWindowsUwpAppUserModelId, parseWindowsUwpApps } from '../main/windowsUwpApps.js';
+import {
+  findComponentAppEntry,
+  getComponentAppHtml,
+  listComponentAppSources,
+} from '../main/componentapps.js';
 
 const categories = ['componentapps', 'webapps', 'extensions'];
-const tauriComponentApps = new Set(['create-item', 'rename', 'windows-settings']);
 const execFileAsync = promisify(execFile);
 const windowsUwpHostPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -181,6 +194,117 @@ export async function getUserDirectories() {
     music: path.join(home, 'Music'),
     videos: path.join(home, 'Videos'),
   };
+}
+
+function absoluteComponentappPath(value) {
+  if (typeof value !== 'string' || !path.isAbsolute(value)) {
+    throw new Error('An absolute file path is required');
+  }
+  return path.resolve(value);
+}
+
+async function getChonkyFolders(projectRoot, platform) {
+  const dirs = await getUserDirectories();
+  const folders = [
+    { id: 'project', name: 'The Omniscience', path: projectRoot },
+    { id: 'home', name: 'Домашняя папка', path: dirs.home },
+    { id: 'downloads', name: 'Загрузки', path: dirs.download },
+    { id: 'pictures', name: 'Картинки', path: dirs.pictures },
+    { id: 'documents', name: 'Документы', path: dirs.documents },
+    { id: 'music', name: 'Музыка', path: dirs.music },
+    { id: 'videos', name: 'Видео', path: dirs.videos },
+  ];
+  folders.unshift(platform === 'win32'
+    ? { id: 'c_root', name: 'Диск C:', path: path.parse(projectRoot).root || 'C:\\' }
+    : { id: 'root', name: 'Корень ФС', path: path.parse(projectRoot).root || '/' });
+  return folders;
+}
+
+async function invokeComponentappIpc(payload, context) {
+  const appId = payload?.appId;
+  const channel = payload?.channel;
+  const args = payload?.args;
+  const projectRoot = typeof context === 'string' ? context : context.projectRoot;
+  if (typeof appId !== 'string' || typeof channel !== 'string' || !Array.isArray(args)) {
+    throw new Error('Componentapp id, channel, and arguments are required');
+  }
+
+  if (appId === 'Chonky') {
+    if (channel === 'get-default-folders') {
+      return getChonkyFolders(
+        projectRoot,
+        typeof context === 'string' ? process.platform : context.platform ?? process.platform,
+      );
+    }
+    if (channel === 'get-files') {
+      const directory = absoluteDirectory({ path: args[0] });
+      try {
+        const entries = await readdir(directory, { withFileTypes: true });
+        const files = await Promise.all(entries.map(async (entry) => {
+          const entryPath = path.join(directory, entry.name);
+          const info = await stat(entryPath);
+          return {
+            id: entryPath,
+            name: entry.name,
+            isDir: info.isDirectory(),
+            size: info.size,
+            modDate: info.mtime.toISOString(),
+          };
+        }));
+        return { success: true, files };
+      } catch (error) {
+        return {
+          success: false,
+          error: error.code === 'EACCES' || error.code === 'EPERM'
+            ? 'permission_denied'
+            : 'unknown',
+        };
+      }
+    }
+  }
+
+  if (appId === 'Monaco') {
+    if (channel === 'read-file') {
+      const filePath = absoluteComponentappPath(args[0]);
+      try {
+        return { success: true, content: await readFile(filePath, 'utf8') };
+      } catch (error) {
+        return { success: false, error: error.message };
+      }
+    }
+    if (channel === 'write-file') {
+      const filePath = absoluteComponentappPath(args[0]);
+      if (typeof args[1] !== 'string') throw new Error('File content must be a string');
+      try {
+        await writeFile(filePath, args[1], 'utf8');
+        return { success: true };
+      } catch (error) {
+        return { success: false, error: error.message };
+      }
+    }
+    if (channel === 'get-default-folders') {
+      return getChonkyFolders(
+        projectRoot,
+        typeof context === 'string' ? process.platform : context.platform ?? process.platform,
+      );
+    }
+    if (channel === 'check-text-file') {
+      const filePath = absoluteComponentappPath(args[0]);
+      let file;
+      try {
+        file = await open(filePath, 'r');
+        const buffer = Buffer.alloc(4096);
+        const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+        return !buffer.subarray(0, bytesRead).includes(0);
+      } catch {
+        return false;
+      } finally {
+        await file?.close();
+      }
+    }
+  }
+
+  throw new Error(`Unsupported legacy IPC channel ${channel} for componentapp ${appId}`);
 }
 
 function mediaKind(name) {
@@ -640,6 +764,21 @@ export async function listPrograms(projectRoot, platform = process.platform) {
   const programs = [];
 
   for (const category of categories) {
+    if (category === 'componentapps') {
+      for (const app of listComponentAppSources(projectRoot)) {
+        const hasEntry = Boolean(getComponentAppHtml(app) || findComponentAppEntry(app));
+        const built = hasEntry && await hasBuiltProgram(projectRoot, category, app.name);
+        programs.push({
+          id: `${category}:${app.name}`,
+          name: app.name,
+          category,
+          entryPoint: hasEntry ? path.join(category, app.name, 'index.html') : null,
+          launchable: built && (app.name !== 'windows-settings' || platform === 'win32'),
+        });
+      }
+      continue;
+    }
+
     const categoryPath = path.join(projectRoot, category);
     let entries;
     try {
@@ -669,12 +808,7 @@ export async function listPrograms(projectRoot, platform = process.platform) {
         name: entry.name,
         category,
         entryPoint,
-        launchable: (
-          category === 'webapps'
-          || (category === 'componentapps'
-            && tauriComponentApps.has(entry.name)
-            && (entry.name !== 'windows-settings' || platform === 'win32'))
-        ) && await hasBuiltProgram(projectRoot, category, entry.name),
+        launchable: category === 'webapps' && await hasBuiltProgram(projectRoot, category, entry.name),
       });
     }
   }
@@ -765,6 +899,9 @@ export async function handleRequest(request, context) {
       projectRoot,
       typeof context === 'string' ? process.platform : context.platform ?? process.platform,
     );
+  }
+  if (request?.method === 'componentapp-ipc') {
+    return invokeComponentappIpc(request.payload, context);
   }
   if (request?.method === 'list-programs') {
     return listPrograms(

@@ -2,10 +2,12 @@ import { build } from 'vite';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { findComponentAppEntry, listComponentAppSources } from './componentapps.js';
 
 function getBuildFingerprint(rootDir, inputDirs) {
   const files = [
     path.join(rootDir, 'main', 'vite_build.js'),
+    path.join(rootDir, 'main', 'componentapps.js'),
     path.join(rootDir, 'package.json'),
     path.join(rootDir, 'package-lock.json'),
   ];
@@ -23,6 +25,7 @@ function getBuildFingerprint(rootDir, inputDirs) {
 
   const hash = crypto.createHash('sha256');
   for (const filePath of files.sort()) {
+    if (!fs.existsSync(filePath)) continue;
     const { size, mtimeMs } = fs.statSync(filePath);
     hash.update(`${path.relative(rootDir, filePath)}\0${size}\0${mtimeMs}\n`);
   }
@@ -42,29 +45,105 @@ function collectOutputFiles(dir, rootDir = dir) {
   return files;
 }
 
-function copyComponentappResources(componentappsDir, distDir) {
-  if (!fs.existsSync(componentappsDir)) return;
+function copyAppSource(sourceDir, destinationDir, includeHtml = true) {
+  fs.cpSync(sourceDir, destinationDir, {
+    recursive: true,
+    force: true,
+    filter(sourcePath) {
+      const relativePath = path.relative(sourceDir, sourcePath);
+      if (!relativePath) return true;
+      if (!includeHtml && relativePath === 'index.html') return false;
+      return !relativePath.split(path.sep).some((part) =>
+        part === 'node_modules' || part === '.git');
+    },
+  });
+}
 
-  for (const entry of fs.readdirSync(componentappsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
+function prepareComponentApps(apps, rootDir) {
+  const rootComponentappsDir = path.join(rootDir, 'componentapps');
+  const prepared = [];
 
-    const appDir = path.join(componentappsDir, entry.name);
-    const destDir = path.join(distDir, 'componentapps', entry.name);
-    fs.cpSync(appDir, destDir, {
-      recursive: true,
-      force: true,
-      filter(source) {
-        const relativePath = path.relative(appDir, source);
-        if (!relativePath) return true;
-        if (relativePath === 'index.html') return false;
-        if (relativePath === 'node_modules'
-          || relativePath.startsWith(`node_modules${path.sep}`)
-          || relativePath === '.git'
-          || relativePath.startsWith(`.git${path.sep}`)) return false;
-        return true;
-      },
-    });
+  for (const app of apps) {
+    const currentSource = app.sources.find(({ priority }) => priority === 1);
+    const appDir = currentSource
+      ? currentSource.directory
+      : path.join(rootComponentappsDir, app.name);
+    const cleanupDirectory = !currentSource;
+
+    if (cleanupDirectory) {
+      fs.mkdirSync(appDir, { recursive: true });
+      for (const source of app.sources) copyAppSource(source.directory, appDir);
+    }
+
+    const htmlPath = path.join(appDir, 'index.html');
+    let cleanupHtml = false;
+    if (!fs.existsSync(htmlPath)) {
+      const entry = findComponentAppEntry(app);
+      if (entry) {
+        const source = app.sources.find(({ directory }) =>
+          entry === directory || entry.startsWith(`${directory}${path.sep}`));
+        const relativeEntry = path.relative(source.directory, entry);
+        const scriptPath = path.relative(appDir, path.join(appDir, relativeEntry))
+          .split(path.sep)
+          .join('/');
+        const html = `<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>${app.name}</title>
+</head>
+<body>
+  <div id="root"></div>
+  <script>window.__APP_WINDOW_ID__ = new URLSearchParams(window.location.search).get('windowId') || '';</script>
+  <script type="module" src="${scriptPath}"></script>
+</body>
+</html>`;
+        fs.writeFileSync(htmlPath, html, 'utf-8');
+        cleanupHtml = true;
+      }
+    }
+
+    prepared.push({ name: app.name, appDir, htmlPath, cleanupHtml, cleanupDirectory });
   }
+  return prepared;
+}
+
+function copyComponentappResources(apps, distDir) {
+  for (const app of apps) {
+    const destDir = path.join(distDir, 'componentapps', app.name);
+    for (const source of app.sources) {
+      copyAppSource(source.directory, destDir, false);
+    }
+  }
+}
+
+function findModuleFile(candidate) {
+  if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+  for (const extension of ['.js', '.jsx', '.ts', '.tsx', '.json', '.css']) {
+    if (fs.existsSync(`${candidate}${extension}`)) return `${candidate}${extension}`;
+  }
+  for (const name of ['index.js', 'index.jsx', 'index.ts', 'index.tsx']) {
+    const indexPath = path.join(candidate, name);
+    if (fs.existsSync(indexPath)) return indexPath;
+  }
+  return null;
+}
+
+function resolveLegacyComponentappImport(source, importer, rootDir) {
+  if (!importer || !source.startsWith('.')) return null;
+  const currentAppsDir = path.join(rootDir, 'componentapps');
+  const relativeImporter = path.relative(currentAppsDir, importer);
+  if (relativeImporter.startsWith('..') || path.isAbsolute(relativeImporter)) return null;
+
+  const legacyImporter = path.join(rootDir, 'legacy', 'componentapps', relativeImporter);
+  const legacyCandidate = findModuleFile(path.resolve(path.dirname(legacyImporter), source));
+  const currentCandidate = findModuleFile(path.resolve(path.dirname(importer), source));
+  const appName = relativeImporter.split(path.sep)[0];
+  const legacyOnly = !fs.existsSync(path.join(currentAppsDir, appName));
+
+  if (legacyOnly && legacyCandidate) return legacyCandidate;
+  if (currentCandidate) return null;
+  return legacyCandidate;
 }
 
 function isBuildCacheValid(cache, fingerprint, distDir) {
@@ -82,62 +161,15 @@ export default async function () {
   const publicDir = global.paths.publicDir;
   const distDir = global.paths.distDir;
   const componentappsDir = global.paths.componentappsDir;
-
-  const input = {};
-
-  const componentInputs = [];
-  if (fs.existsSync(componentappsDir)) {
-    const entries = fs.readdirSync(componentappsDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const appDir = path.join(componentappsDir, entry.name);
-      const componentFile = path.join(appDir, 'Index.jsx');
-      if (!fs.existsSync(componentFile)) continue;
-
-      const htmlPath = path.join(appDir, 'index.html');
-      if (!fs.existsSync(htmlPath)) {
-        const htmlContent = `<!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="UTF-8" />
-  <title>${entry.name}</title>
-</head>
-<body>
-  <div id="root"></div>
-  <script>
-    window.__APP_WINDOW_ID__ = new URLSearchParams(window.location.search).get('windowId') || '';
-  </script>
-  <script type="module" src="./Index.jsx"></script>
-</body>
-</html>`;
-        fs.writeFileSync(htmlPath, htmlContent, 'utf-8');
-      }
-
-      const mainJsxPath = path.join(appDir, 'Index.jsx');
-      if (!fs.existsSync(mainJsxPath)) {
-        const mainContent = `import React from 'react';
-import ReactDOM from 'react-dom/client';
-import App from './App.jsx';
-
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <App windowId={window.__APP_WINDOW_ID__} />
-  </React.StrictMode>
-);`;
-        fs.writeFileSync(mainJsxPath, mainContent, 'utf-8');
-      }
-
-      input[`componentapps/${entry.name}/index.html`] = htmlPath;
-      componentInputs.push(appDir);
-    }
-  }
+  const componentApps = listComponentAppSources(rootDir);
 
   const fingerprint = getBuildFingerprint(rootDir, [
     srcDir,
     publicDir,
     path.join(rootDir, 'themes'),
     path.join(rootDir, 'webapps'),
-    ...componentInputs,
+    path.join(rootDir, 'legacy', 'componentapps'),
+    componentappsDir,
   ]);
   const cachePath = path.join(distDir, '.vite-build-cache.json');
   if (fs.existsSync(cachePath)) {
@@ -152,43 +184,66 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     }
   }
 
-  await build({
-    configFile: false,
-    root: rootDir,
-    base: './',
-    resolve: {
-      alias: {
-        '@src': srcDir,
-        '@public': publicDir,
-        '@viewRuntime': path.join(srcDir, 'viewRuntime', 'index.js'),
-        '@themes': path.join(rootDir, 'themes'),
-      },
-    },
-    build: {
-      outDir: distDir,
-      emptyOutDir: true,
-      sourcemap: true,
-      chunkSizeWarningLimit: Infinity,
-      rollupOptions: { input },
-    },
-    publicDir: path.join(rootDir, 'public'),
-    plugins: [
-      {
-        name: 'copy-webapps',
-        async writeBundle() {
-          const webappsDir = global.paths.webappsDir;
-          if (fs.existsSync(webappsDir)) {
-            const dest = path.join(distDir, 'webapps');
-            fs.cpSync(webappsDir, dest, { recursive: true });
-          }
-          copyComponentappResources(componentappsDir, distDir);
+  const preparedApps = prepareComponentApps(componentApps, rootDir);
+  const input = {};
+  for (const app of preparedApps) {
+    if (fs.existsSync(app.htmlPath)) {
+      input[`componentapps/${app.name}/index.html`] = app.htmlPath;
+    }
+  }
+
+  try {
+    await build({
+      configFile: false,
+      root: rootDir,
+      base: './',
+      resolve: {
+        alias: {
+          '@src': srcDir,
+          '@public': publicDir,
+          '@viewRuntime': path.join(srcDir, 'viewRuntime', 'index.js'),
+          '@themes': path.join(rootDir, 'themes'),
         },
       },
-    ],
-  });
+      build: {
+        outDir: distDir,
+        emptyOutDir: true,
+        sourcemap: true,
+        chunkSizeWarningLimit: Infinity,
+        rollupOptions: {
+          input,
+          plugins: [{
+            name: 'resolve-legacy-componentapp-imports',
+            resolveId(source, importer) {
+              return resolveLegacyComponentappImport(source, importer, rootDir);
+            },
+          }],
+        },
+      },
+      publicDir: path.join(rootDir, 'public'),
+      plugins: [
+        {
+          name: 'copy-webapps',
+          async writeBundle() {
+            const webappsDir = global.paths.webappsDir;
+            if (fs.existsSync(webappsDir)) {
+              const dest = path.join(distDir, 'webapps');
+              fs.cpSync(webappsDir, dest, { recursive: true });
+            }
+            copyComponentappResources(componentApps, distDir);
+          },
+        },
+      ],
+    });
 
-  fs.writeFileSync(cachePath, JSON.stringify({
-    fingerprint,
-    outputs: collectOutputFiles(distDir),
-  }));
+    fs.writeFileSync(cachePath, JSON.stringify({
+      fingerprint,
+      outputs: collectOutputFiles(distDir),
+    }));
+  } finally {
+    for (const app of preparedApps) {
+      if (app.cleanupHtml) fs.rmSync(app.htmlPath, { force: true });
+      if (app.cleanupDirectory) fs.rmSync(app.appDir, { recursive: true, force: true });
+    }
+  }
 }

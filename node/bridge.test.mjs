@@ -7,8 +7,10 @@ import path from 'node:path';
 import {
   DEFAULT_THEME_SETTINGS,
   handleRequest,
+  listPrograms,
   startFileServer,
 } from './bridge.mjs';
+import buildComponentApps from '../main/vite_build.js';
 
 test('lists project programs and marks only apps with an HTML entry point', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'omni-tauri-'));
@@ -56,6 +58,115 @@ test('lists project programs and marks only apps with an HTML entry point', asyn
       false,
     );
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('discovers componentapps in both source roots and accepts TypeScript entry points', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-componentapp-sources-'));
+  try {
+    const appSources = [
+      path.join(root, 'legacy', 'componentapps', 'legacy-only'),
+      path.join(root, 'legacy', 'componentapps', 'shared'),
+      path.join(root, 'componentapps', 'shared'),
+    ];
+    for (const directory of appSources) {
+      await mkdir(directory, { recursive: true });
+    }
+    await writeFile(
+      path.join(appSources[0], 'Index.ts'),
+      'export const legacyEntry: string = "legacy";',
+    );
+    await writeFile(
+      path.join(appSources[1], 'Index.jsx'),
+      'export default function LegacyShared() {}',
+    );
+    await writeFile(
+      path.join(appSources[2], 'Index.tsx'),
+      'export default function CurrentShared() { return <main />; }',
+    );
+
+    for (const name of ['legacy-only', 'shared']) {
+      const builtPath = path.join(root, 'public', 'omniscience', 'componentapps', name);
+      await mkdir(builtPath, { recursive: true });
+      await writeFile(path.join(builtPath, 'index.html'), '<html></html>');
+    }
+
+    const programs = await listPrograms(root);
+    assert.deepEqual(
+      programs.filter(({ category }) => category === 'componentapps').map(
+        ({ id, entryPoint, launchable }) => ({ id, entryPoint, launchable }),
+      ),
+      [
+        {
+          id: 'componentapps:legacy-only',
+          entryPoint: path.join('componentapps', 'legacy-only', 'index.html'),
+          launchable: true,
+        },
+        {
+          id: 'componentapps:shared',
+          entryPoint: path.join('componentapps', 'shared', 'index.html'),
+          launchable: true,
+        },
+      ],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('builds TypeScript componentapps from both roots without leaving generated source files', async () => {
+  const root = await mkdtemp(path.join(
+    process.cwd(),
+    'node_modules',
+    '.cache',
+    'omni-componentapp-build-',
+  ));
+  const previousPaths = global.paths;
+  const currentPath = path.join(root, 'componentapps', 'current-ts');
+  const legacyPath = path.join(root, 'legacy', 'componentapps', 'legacy-ts');
+  const distPath = path.join(root, 'dist');
+  try {
+    for (const directory of [
+      path.join(root, 'src'),
+      path.join(root, 'public'),
+      path.join(root, 'themes'),
+      path.join(root, 'webapps'),
+      currentPath,
+      legacyPath,
+    ]) {
+      await mkdir(directory, { recursive: true });
+    }
+    await writeFile(
+      path.join(currentPath, 'Index.ts'),
+      'const label: string = "current"; document.body.textContent = label;',
+    );
+    await writeFile(
+      path.join(legacyPath, 'Index.ts'),
+      'const label: string = "legacy"; document.body.textContent = label;',
+    );
+    global.paths = {
+      projectRoot: root,
+      srcDir: path.join(root, 'src'),
+      publicDir: path.join(root, 'public'),
+      distDir: distPath,
+      componentappsDir: path.join(root, 'componentapps'),
+      webappsDir: path.join(root, 'webapps'),
+    };
+
+    await buildComponentApps();
+
+    for (const name of ['current-ts', 'legacy-ts']) {
+      const html = await readFile(
+        path.join(distPath, 'componentapps', name, 'index.html'),
+        'utf8',
+      );
+      assert.match(html, /<script type="module"/);
+    }
+    await assert.rejects(stat(path.join(root, 'componentapps', 'legacy-ts')));
+    await assert.rejects(stat(path.join(currentPath, 'index.html')));
+  } finally {
+    global.paths = previousPaths;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -110,6 +221,51 @@ test('builds the original overview app list from built component and web apps', 
     assert.equal(
       apps.find(({ id }) => id === 'apps-list').icon,
       `data:image/png;base64,${Buffer.from('icon').toString('base64')}`,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('preserves the legacy Chonky and Monaco file IPC contracts', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-componentapp-ipc-'));
+  const textPath = path.join(root, 'sample.txt');
+  try {
+    await writeFile(textPath, 'first version');
+    const context = { projectRoot: root, platform: process.platform };
+    const folders = await handleRequest({
+      method: 'componentapp-ipc',
+      payload: { appId: 'Chonky', channel: 'get-default-folders', args: [] },
+    }, context);
+    assert.ok(folders.some((folder) => folder.id === 'project' && folder.path === root));
+
+    const listing = await handleRequest({
+      method: 'componentapp-ipc',
+      payload: { appId: 'Chonky', channel: 'get-files', args: [root] },
+    }, context);
+    assert.equal(listing.success, true);
+    assert.ok(listing.files.some((file) => file.id === textPath && file.isDir === false));
+
+    const read = await handleRequest({
+      method: 'componentapp-ipc',
+      payload: { appId: 'Monaco', channel: 'read-file', args: [textPath] },
+    }, context);
+    assert.deepEqual(read, { success: true, content: 'first version' });
+    await handleRequest({
+      method: 'componentapp-ipc',
+      payload: {
+        appId: 'Monaco',
+        channel: 'write-file',
+        args: [textPath, 'second version'],
+      },
+    }, context);
+    assert.equal(await readFile(textPath, 'utf8'), 'second version');
+    await assert.rejects(
+      handleRequest({
+        method: 'componentapp-ipc',
+        payload: { appId: 'Monaco', channel: 'unexpected', args: [] },
+      }, context),
+      /Unsupported legacy IPC channel/,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -597,7 +753,7 @@ test('does not open a program unless it is an available webapp', async () => {
   }
 });
 
-test('opens only the migrated componentapps in trusted Tauri asset windows', async () => {
+test('opens built componentapps in trusted Tauri asset windows', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'omni-tauri-'));
   const context = {
     projectRoot: root,

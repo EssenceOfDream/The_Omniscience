@@ -25,8 +25,12 @@ middle-click closes it. Menu opens a separate overview window, leaving the panel
 at a fixed size. Closing any of the three workspace windows exits the whole
 workspace.
 
-The overview lists programs found in the local `componentapps`,
-and `webapps` directories. On Windows it also lists
+The overview lists programs found in the local `componentapps` and `webapps`
+directories. Componentapps are collected from both `componentapps` and
+`legacy/componentapps`; files in the current directory override files of the
+same name from `legacy`, while legacy-only apps and resources remain available.
+`Index.tsx`, `Index.ts`, `Index.jsx`, and `Index.js` can be used as frontend
+entrypoints when an app does not provide `index.html`. On Windows it also lists
 Start Menu shortcuts and installed UWP apps, which launch through Explorer or
 the Windows activation API.
 Standalone webapps open in separate Tauri windows.
@@ -47,16 +51,38 @@ The desktop window lists the user's Desktop directory and supports folder
 navigation, file/folder creation, renaming, and opening files through the OS.
 The **Files** section provides directory navigation, listing, folder/file
 creation, and rename operations through the same Node.js sidecar. It can also
-open the existing `create-item` and `rename` componentapps in frameless Tauri
+open componentapps with the supported frontend entrypoints in frameless Tauri
 windows. Creation and rename refuse to replace existing entries.
 The **Appearance** section makes Omni Theme a built-in Tauri feature and
 applies its existing color-processing engine to the shell and program windows.
+
+## Componentapp backends
+
+A componentapp can provide `backend.rs` to register a native Tauri backend.
+The module is compiled into the host and must export:
+
+```rust
+pub fn invoke(
+    method: &str,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String>
+```
+
+The frontend calls it through the compatibility API
+`window.electron_componentapp_API.invoke(channel, ...args)`. The method name is
+passed as `channel`, and the arguments are passed to Rust as a JSON array.
+Without a Rust backend, the compatibility bridge also preserves the existing
+file IPC used by Chonky and Monaco. Existing JavaScript and JSX application
+files do not need to be changed to use the catalog or frontend-entrypoint
+support.
 
 ## Current scope
 
 This migration slice validates the three-window Tauri shell, Node bridge,
 program catalog, filesystem workflows, built-in theme, desktop file grid, and
-standalone webapp windows with basic lifecycle controls. The desktop grid does
+standalone webapp windows with basic lifecycle controls. Other app-specific
+legacy Electron IPC handlers still require a Tauri backend before their
+IPC-dependent features can work. The desktop grid does
 not yet have native file icons, media previews, or context-menu/drag
 integrations. A customizable desktop window layout, Windows desktop
 integration, extension runtime, and app-specific Electron IPC are still future

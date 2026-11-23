@@ -20,6 +20,10 @@ const WINDOW_CONTROLS_WIDTH: f64 = 104.0;
 const WINDOW_CONTROLS_HEIGHT: f64 = 62.0;
 const WINDOW_CONTROLS_BOTTOM_PADDING: f64 = 0.0;
 
+mod componentapp_backends {
+    include!(concat!(env!("OUT_DIR"), "/componentapp_backends.rs"));
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ManagedProgramWindow {
@@ -426,18 +430,35 @@ fn request_node(runtime: &mut NodeRuntime, method: &str, payload: Value) -> Resu
 }
 
 fn component_app_init_script(
+    app_id: &str,
     params: &Value,
     theme_settings: &Value,
     is_windows_settings: bool,
 ) -> Result<String, String> {
+    let app_id = serde_json::to_string(app_id)
+        .map_err(|error| format!("Could not encode componentapp id: {error}"))?;
     let params = serde_json::to_string(params)
         .map_err(|error| format!("Could not encode componentapp parameters: {error}"))?;
     let theme_settings = serde_json::to_string(theme_settings)
         .map_err(|error| format!("Could not encode componentapp theme settings: {error}"))?;
+    let platform = if cfg!(target_os = "windows") {
+        "win32"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
     let script = r#"
 (() => {
+  window.__OMNI_COMPONENTAPP_ID__ = __OMNI_APP_ID__;
   window.__OMNI_INITIAL_PARAMS__ = __OMNI_PARAMS__;
   const invoke = (method, payload) => window.__TAURI__.core.invoke("node_request", { method, payload });
+  const componentInvoke = (channel, ...args) =>
+    window.__TAURI__.core.invoke("componentapp_request", {
+      appId: __OMNI_APP_ID__,
+      method: channel,
+      payload: args,
+    });
   const operation = async (method, payload) => {
     try {
       return { success: true, ...(await invoke(method, payload)) };
@@ -447,10 +468,33 @@ fn component_app_init_script(
     }
   };
   window.electron_desktop_API = {
+    platform: "__OMNI_PLATFORM__",
+    getProjectRoot: () => invoke("health", {}).then((result) => result.projectRoot),
+    getUserDirs: () => invoke("get-user-dirs", {}),
+    getAppsList: () => invoke("get-apps-list", {}),
+    closeWindow: () => window.__TAURI__.window.getCurrentWindow().close(),
+    invoke: (channel, ...args) => componentInvoke(channel, ...args),
     createFolder: (dir, name) => operation("create-folder", { parentPath: dir, name }),
     createFile: (dir, name) => operation("create-file", { parentPath: dir, name }),
     renamePath: (path, name) => operation("rename-path", { path, name }),
-    closeWindow: () => window.__TAURI__.window.getCurrentWindow().close(),
+  };
+  window.electron_componentapp_API = { invoke: componentInvoke };
+  window.electron_view_API = {
+    getAppsList: () => invoke("get-apps-list", {}),
+    getProjectRoot: () => invoke("health", {}).then((result) => result.projectRoot),
+    dispatch: (type, payload) => componentInvoke("view:dispatch", type, payload),
+    subscribe: () => {},
+    unsubscribe: () => {},
+    onStateUpdate: () => () => {},
+  };
+  window.electron_mainWindow_API = {
+    onWindowStateChange: () => () => {},
+    startResize: () => {},
+    sendResizeMove: () => {},
+    endResize: () => {},
+    window_minimize: () => window.__TAURI__.window.getCurrentWindow().minimize(),
+    window_maximize: () => window.__TAURI__.window.getCurrentWindow().toggleMaximize(),
+    window_close: () => window.__TAURI__.window.getCurrentWindow().close(),
   };
   __OMNI_WINDOWS_SETTINGS_API__
   try {
@@ -508,8 +552,10 @@ fn component_app_init_script(
         ""
     };
     Ok(script
+        .replace("__OMNI_APP_ID__", &app_id)
         .replace("__OMNI_PARAMS__", &params)
         .replace("__OMNI_THEME_SETTINGS__", &theme_settings)
+        .replace("__OMNI_PLATFORM__", platform)
         .replace("__OMNI_WINDOWS_SETTINGS_API__", windows_settings_api))
 }
 
@@ -896,7 +942,7 @@ async fn open_program(
             .get("themeSettings")
             .ok_or_else(|| "Node.js sidecar returned no theme settings".to_string())?;
         let script =
-            component_app_init_script(&params, theme_settings, name == "windows-settings")?;
+            component_app_init_script(name, &params, theme_settings, name == "windows-settings")?;
         let (width, height) = if name == "windows-settings" {
             (1120.0, 800.0)
         } else {
@@ -960,6 +1006,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             node_request,
+            componentapp_request,
             toggle_overview,
             open_overview,
             close_overview,
@@ -976,4 +1023,23 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[tauri::command]
+async fn componentapp_request(
+    state: State<'_, NodeBridge>,
+    app_id: String,
+    method: String,
+    payload: Value,
+) -> Result<Value, String> {
+    if componentapp_backends::has_backend(&app_id) {
+        return componentapp_backends::dispatch(&app_id, &method, payload);
+    }
+
+    call_node(
+        Arc::clone(&state.0),
+        "componentapp-ipc".to_string(),
+        json!({ "appId": app_id, "channel": method, "args": payload }),
+    )
+    .await
 }
