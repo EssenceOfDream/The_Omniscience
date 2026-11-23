@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs';
 import { createServer } from 'node:http';
 import { execFile, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   lstat,
   mkdir,
@@ -9,6 +10,7 @@ import {
   readdir,
   rename,
   stat,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
@@ -16,9 +18,20 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { WebSocket, WebSocketServer } from 'ws';
+import wifi from 'node-wifi';
+import { spawn as spawnPty } from '@lydell/node-pty';
 import { startWindowsNativeHost } from './windows-native-host.mjs';
 import { openEverything } from '../main/everythingSearch.js';
 import { isWindowsUwpAppUserModelId, parseWindowsUwpApps } from '../main/windowsUwpApps.js';
+import { enumeratePaths } from '../componentapps/omni-archiver/enumerate.js';
+import { readClipboard } from '../componentapps/omni-archiver/clipboard.js';
+import { runPipeline } from '../componentapps/omni-archiver/pipeline.js';
+import {
+  extractFilesFromVhd,
+  extractVhdFromFragments,
+} from '../componentapps/omni-archiver/unpack.js';
+import { getDisplaySsid } from '../componentapps/NetworkManager/wifi-encoding.js';
 import {
   findComponentAppEntry,
   getComponentAppHtml,
@@ -27,6 +40,10 @@ import {
 
 const categories = ['componentapps', 'webapps', 'extensions'];
 const execFileAsync = promisify(execFile);
+const terminalSessions = new Map();
+const minServers = new Map();
+let activeArchiverJob = null;
+let wifiInitialized = false;
 const defaultWindowsIconState = {
   cache: new Map(),
   pending: new Map(),
@@ -431,6 +448,367 @@ async function listComponentappFiles(rawPath) {
   }
 }
 
+function getComponentappInstance(payload) {
+  return typeof payload?.windowId === 'string' && payload.windowId
+    ? payload.windowId
+    : `component-${payload?.appId || 'unknown'}`;
+}
+
+async function invokeNetworkManager(channel, args, context) {
+  const failure = (error) => ({
+    success: false,
+    error: error instanceof Error ? error.message : String(error),
+  });
+  const wifiAdapter = typeof context === 'object' && context?.wifi
+    ? context.wifi
+    : wifi;
+  try {
+    if (channel.startsWith('wifi:') && wifiAdapter === wifi && !wifiInitialized) {
+      wifiAdapter.init({ iface: null });
+      wifiInitialized = true;
+    }
+    if (channel === 'wifi:scan') {
+      const networks = await wifiAdapter.scan();
+      return {
+        success: true,
+        data: networks.map((network) => ({
+          ...network,
+          displaySsid: getDisplaySsid(network.ssid || ''),
+        })),
+      };
+    }
+    if (channel === 'wifi:connect') {
+      const [ssid, password = ''] = args;
+      if (typeof ssid !== 'string' || !ssid.trim()) return failure(new Error('Не указано имя Wi-Fi сети'));
+      await wifiAdapter.connect({ ssid, password });
+      return { success: true };
+    }
+    if (channel === 'wifi:disconnect') {
+      await wifiAdapter.disconnect();
+      return { success: true };
+    }
+    if (channel === 'wifi:status') {
+      const connections = await wifiAdapter.getCurrentConnections();
+      return { success: true, data: connections[0] || null };
+    }
+    if (channel === 'wifi:start-hotspot') {
+      const [ssid, password] = args;
+      if (process.platform !== 'win32') return failure(new Error('Точка доступа поддерживается только в Windows'));
+      if (typeof ssid !== 'string' || !ssid.trim() || ssid.length > 32) {
+        return failure(new Error('Имя точки доступа должно содержать от 1 до 32 символов'));
+      }
+      if (typeof password !== 'string' || password.length < 8 || password.length > 63) {
+        return failure(new Error('Пароль точки доступа должен содержать от 8 до 63 символов'));
+      }
+      await execFileAsync('netsh.exe', [
+        'wlan', 'set', 'hostednetwork', 'mode=allow', `ssid=${ssid}`, `key=${password}`,
+      ], { windowsHide: true });
+      await execFileAsync('netsh.exe', ['wlan', 'start', 'hostednetwork'], { windowsHide: true });
+      return { success: true };
+    }
+    if (channel === 'wifi:stop-hotspot') {
+      if (process.platform !== 'win32') return failure(new Error('Точка доступа поддерживается только в Windows'));
+      await execFileAsync('netsh.exe', ['wlan', 'stop', 'hostednetwork'], { windowsHide: true });
+      return { success: true };
+    }
+    if (channel.startsWith('bluetooth:')) {
+      return failure(new Error('Управление Bluetooth-устройствами пока не поддерживается в Tauri'));
+    }
+  } catch (error) {
+    return failure(error);
+  }
+  throw new Error(`Unsupported NetworkManager channel ${channel}`);
+}
+
+async function performPowerAction(action, context) {
+  const allowedActions = ['logout', 'shutdown', 'restart', 'sleep'];
+  if (!allowedActions.includes(action)) {
+    throw new Error(`Unsupported power action: ${action}`);
+  }
+
+  const platform = typeof context === 'string'
+    ? process.platform
+    : context.platform ?? process.platform;
+
+  if (platform === 'win32') {
+    if (action === 'sleep') {
+      const result = await getWindowsNativeHost(context).request('suspend');
+      if (result !== true) throw new Error('Windows sleep request failed');
+      return { ok: true };
+    }
+
+    const args = {
+      logout: ['/l'],
+      shutdown: ['/s', '/t', '0'],
+      restart: ['/r', '/t', '0'],
+    }[action];
+    const executable = path.join(
+      typeof context === 'string'
+        ? process.env.SystemRoot ?? 'C:\\Windows'
+        : context.systemRoot ?? process.env.SystemRoot ?? 'C:\\Windows',
+      'System32',
+      'shutdown.exe',
+    );
+    const run = typeof context === 'string' ? execFileAsync : context.execFileAsync ?? execFileAsync;
+    await run(executable, args, { windowsHide: true, timeout: 10000 });
+    return { ok: true };
+  }
+
+  if (platform === 'linux') {
+    const run = typeof context === 'string' ? execFileAsync : context.execFileAsync ?? execFileAsync;
+    if (action === 'sleep') {
+      await run('systemctl', ['suspend'], { timeout: 15000 });
+    } else if (action === 'shutdown' || action === 'restart') {
+      await run('systemctl', [action === 'shutdown' ? 'poweroff' : 'reboot'], {
+        timeout: 15000,
+      });
+    } else {
+      const sessionId = typeof context === 'string'
+        ? process.env.XDG_SESSION_ID
+        : context.sessionId ?? process.env.XDG_SESSION_ID;
+      if (sessionId) {
+        await run('loginctl', ['terminate-session', sessionId], { timeout: 15000 });
+      } else {
+        const username = typeof context === 'string'
+          ? os.userInfo().username
+          : context.username ?? os.userInfo().username;
+        await run('loginctl', ['terminate-user', username], { timeout: 15000 });
+      }
+    }
+    return { ok: true };
+  }
+
+  throw new Error(`Power actions are not supported on ${platform}`);
+}
+
+async function startMinServer(instanceId, rawPort) {
+  const port = Number(rawPort);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return { success: false, error: 'Порт должен быть числом от 1 до 65535' };
+  }
+  const previous = minServers.get(instanceId);
+  if (previous) {
+    for (const client of previous.clients) client.close();
+    await new Promise((resolve) => previous.server.close(resolve));
+    minServers.delete(instanceId);
+  }
+
+  const server = new WebSocketServer({ port, host: '0.0.0.0' });
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('listening', resolve);
+      server.once('error', reject);
+    });
+  } catch (error) {
+    server.close();
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  const clients = new Set();
+  server.on('connection', (socket) => {
+    clients.add(socket);
+    socket.on('message', (data, isBinary) => {
+      for (const client of clients) {
+        if (client !== socket && client.readyState === WebSocket.OPEN) {
+          client.send(data, { binary: isBinary });
+        }
+      }
+    });
+    socket.on('close', () => clients.delete(socket));
+  });
+  server.on('error', (error) => {
+    console.error('[Min] WebSocket server error:', error);
+  });
+  const address = server.address();
+  const activePort = address && typeof address === 'object' ? address.port : port;
+  minServers.set(instanceId, { server, clients });
+  return { success: true, port: activePort };
+}
+
+async function invokeMin(instanceId, channel, args) {
+  if (channel === 'start-server') return startMinServer(instanceId, args[0]);
+  if (channel === 'stop-server') {
+    const active = minServers.get(instanceId);
+    if (active) {
+      minServers.delete(instanceId);
+      for (const client of active.clients) client.close();
+      await new Promise((resolve) => active.server.close(resolve));
+    }
+    return { success: true };
+  }
+  throw new Error(`Unsupported Min channel ${channel}`);
+}
+
+function invokeTerminal(instanceId, channel, args) {
+  if (channel === 'terminal-start') {
+    const current = terminalSessions.get(instanceId);
+    if (current) {
+      current.pty.kill();
+      terminalSessions.delete(instanceId);
+    }
+    const shell = process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || 'bash';
+    const pty = spawnPty(shell, [], {
+      name: 'xterm-color',
+      cols: 80,
+      rows: 30,
+      cwd: os.homedir(),
+      env: { ...process.env, TERM: 'xterm-256color' },
+      useConpty: process.platform === 'win32',
+    });
+    const session = { pty, output: [] };
+    terminalSessions.set(instanceId, session);
+    pty.onData((data) => {
+      session.output.push(data);
+      if (session.output.length > 2048) session.output.splice(0, session.output.length - 2048);
+    });
+    pty.onExit(({ exitCode }) => {
+      session.output.push(`\r\n[process exited with code ${exitCode}]\r\n`);
+      session.exited = true;
+    });
+    return { success: true };
+  }
+  const session = terminalSessions.get(instanceId);
+  if (channel === 'terminal-input') {
+    if (session && typeof args[0] === 'string') session.pty.write(args[0]);
+    return { success: true };
+  }
+  if (channel === 'terminal-resize') {
+    const { cols, rows } = args[0] || {};
+    if (session && Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
+      session.pty.resize(cols, rows);
+    }
+    return { success: true };
+  }
+  if (channel === 'terminal-poll') {
+    const data = session ? session.output.splice(0) : [];
+    if (session?.exited) terminalSessions.delete(instanceId);
+    return { data };
+  }
+  if (channel === 'terminal-exit') {
+    if (session) {
+      terminalSessions.delete(instanceId);
+      session.pty.kill();
+    }
+    return { success: true };
+  }
+  throw new Error(`Unsupported xterm channel ${channel}`);
+}
+
+async function resolveArchiverOutputPath(rawPath) {
+  if (typeof rawPath !== 'string' || !rawPath.trim()) {
+    return { ok: false, error: 'Путь пуст' };
+  }
+  const outputPath = path.resolve(rawPath.trim().replace(/^"|"$/g, ''));
+  try {
+    await mkdir(outputPath, { recursive: true });
+    const info = await stat(outputPath);
+    if (!info.isDirectory()) return { ok: false, error: 'Это не папка' };
+    const probe = path.join(outputPath, `.write-test-${randomUUID()}`);
+    await writeFile(probe, '');
+    await unlink(probe);
+    return { ok: true, path: outputPath };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function startArchiverJob(instanceId, operation) {
+  if (activeArchiverJob && !activeArchiverJob.done) {
+    return { ok: false, error: 'Уже выполняется другая задача' };
+  }
+  const job = {
+    id: randomUUID(),
+    instanceId,
+    controller: new AbortController(),
+    progress: [],
+    done: false,
+    result: null,
+  };
+  activeArchiverJob = job;
+  const send = (progress) => {
+    job.progress.push(progress);
+    if (job.progress.length > 512) job.progress.shift();
+  };
+  void Promise.resolve()
+    .then(() => operation(send, job.controller.signal))
+    .then((result) => { job.result = { ok: true, result }; })
+    .catch((error) => {
+      job.result = { ok: false, error: error instanceof Error ? error.message : String(error) };
+    })
+    .finally(() => { job.done = true; });
+  return { ok: true, jobId: job.id };
+}
+
+async function invokeArchiver(instanceId, channel, args) {
+  if (channel === 'resolve-output-path') return resolveArchiverOutputPath(args[0]);
+  if (channel === 'read-clipboard') {
+    const tempDir = path.join(os.tmpdir(), `omni-archiver-${process.pid}`);
+    await mkdir(tempDir, { recursive: true });
+    try {
+      return { ok: true, data: await readClipboard(tempDir) };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  if (channel === 'save-text-to-temp') {
+    if (typeof args[0] !== 'string') return { ok: false, error: 'Ожидался текст' };
+    const tempDir = path.join(os.tmpdir(), `omni-archiver-${process.pid}`);
+    await mkdir(tempDir, { recursive: true });
+    const filePath = path.join(tempDir, `clip-${randomUUID()}.txt`);
+    await writeFile(filePath, args[0], 'utf8');
+    return { ok: true, path: filePath };
+  }
+  if (channel === 'enumerate') {
+    try {
+      return { ok: true, ...(await enumeratePaths(args[0])) };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  if (channel === 'start') {
+    return startArchiverJob(instanceId, (send, signal) =>
+      runPipeline(args[0], send, signal));
+  }
+  if (channel === 'unpack-fragments') {
+    const { firstFragment, outputVhd } = args[0] || {};
+    return startArchiverJob(instanceId, async (send, signal) => {
+      await extractVhdFromFragments(firstFragment, outputVhd, send, signal);
+    });
+  }
+  if (channel === 'unpack-vhd') {
+    const { vhdPath, outputDir } = args[0] || {};
+    return startArchiverJob(instanceId, async (send, signal) => {
+      await extractFilesFromVhd(vhdPath, outputDir, send, signal);
+    });
+  }
+  if (channel === 'poll') {
+    const job = activeArchiverJob;
+    if (!job || job.id !== args[0] || job.instanceId !== instanceId) {
+      return { ok: false, error: 'Задача не найдена' };
+    }
+    const result = {
+      ok: true,
+      progress: job.progress.splice(0),
+      done: job.done,
+      result: job.done ? job.result : null,
+    };
+    if (job.done) activeArchiverJob = null;
+    return result;
+  }
+  if (channel === 'cancel') {
+    const job = activeArchiverJob;
+    if (!job || job.id !== args[0] || job.instanceId !== instanceId) {
+      return { ok: false, error: 'Задача не найдена' };
+    }
+    job.controller.abort();
+    return { ok: true };
+  }
+  throw new Error(`Unsupported Omni Archiver channel ${channel}`);
+}
+
 async function invokeComponentappIpc(payload, context) {
   const appId = payload?.appId;
   const channel = payload?.channel;
@@ -439,6 +817,7 @@ async function invokeComponentappIpc(payload, context) {
   if (typeof appId !== 'string' || typeof channel !== 'string' || !Array.isArray(args)) {
     throw new Error('Componentapp id, channel, and arguments are required');
   }
+  const instanceId = getComponentappInstance(payload);
 
   if (appId === 'Chonky') {
     if (channel === 'get-default-folders') {
@@ -495,6 +874,14 @@ async function invokeComponentappIpc(payload, context) {
       }
     }
   }
+
+  if (appId === 'NetworkManager') return invokeNetworkManager(channel, args, context);
+  if (appId === 'power-menu' && channel === 'power-menu:execute') {
+    return performPowerAction(args[0]?.action, context);
+  }
+  if (appId === 'Min') return invokeMin(instanceId, channel, args);
+  if (appId === 'omni-archiver') return invokeArchiver(instanceId, channel, args);
+  if (appId === 'xterm') return invokeTerminal(instanceId, channel, args);
 
   throw new Error(`Unsupported legacy IPC channel ${channel} for componentapp ${appId}`);
 }

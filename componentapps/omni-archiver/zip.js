@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { Writable } from 'stream';
 import { once } from 'events';
-import archiver from 'archiver';
+import { ZipArchive } from 'archiver';
 
 class FragmentWriter extends Writable {
   constructor(limit, getFilename, onFragment) {
@@ -79,7 +79,7 @@ export async function zipAndSplit({
   };
 
   const writer = new FragmentWriter(maxSizeBytes, getFilename, onFragment);
-  const archive = archiver('zip', { zlib: { level: 9 } });
+  const archive = new ZipArchive({ zlib: { level: 9 } });
   archive.on('warning', (e) => { if (e.code !== 'ENOENT') throw e; });
 
   let read = 0;

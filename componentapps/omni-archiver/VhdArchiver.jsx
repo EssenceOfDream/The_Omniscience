@@ -77,6 +77,39 @@ export default function VhdArchiver() {
     }
   };
 
+  const selectFiles = async (multiple, forUnpack = false) => {
+    setError('');
+    try {
+      const selection = await api.selectFiles(multiple);
+      if (!selection.ok) {
+        if (selection.error !== 'cancelled') setError(selection.error || 'Не удалось выбрать файлы');
+        return;
+      }
+      const paths = selection.paths || [];
+      if (forUnpack) {
+        if (paths[0]) handleFileDrop(paths[0]);
+        return;
+      }
+      if (!paths.length) return;
+      setMode('pack');
+      setRawPaths((previous) => Array.from(new Set([...previous, ...paths])));
+      if (!baseName) setBaseName(paths[0].split(/[\\/]/).pop().replace(/\.[^.]+$/, ''));
+    } catch (selectionError) {
+      setError(selectionError.message || String(selectionError));
+    }
+  };
+
+  useEffect(() => api.onFilesDropped((paths) => {
+    if (!Array.isArray(paths) || paths.length === 0) return;
+    if (paths.length === 1) {
+      handleFileDrop(paths[0]);
+      return;
+    }
+    setMode('pack');
+    setRawPaths((previous) => Array.from(new Set([...previous, ...paths])));
+    if (!baseName) setBaseName(paths[0].split(/[\\/]/).pop().replace(/\.[^.]+$/, ''));
+  }), [api, baseName]);
+
   const onDrop = (e) => {
     e.preventDefault();
     setDragOver(false);
@@ -174,24 +207,11 @@ export default function VhdArchiver() {
           Поддерживается: файлы/папки (для упаковки), .zip.001.txt (сборка VHD), .vhd (распаковка)
         </Typography>
         <Stack direction="row" spacing={1} justifyContent="center" flexWrap="wrap" useFlexGap>
-          <Button component="label" startIcon={<FolderOpenIcon />} variant="outlined">
+          <Button onClick={() => selectFiles(false, true)} startIcon={<FolderOpenIcon />} variant="outlined">
             Выбрать файл для распаковки
-            <input type="file" hidden onChange={(e) => {
-              const p = Array.from(e.target.files || []).map(f => api.getPathForFile(f))[0];
-              if (p) handleFileDrop(p);
-              e.target.value = '';
-            }} />
           </Button>
-          <Button component="label" startIcon={<UnarchiveIcon />} variant="outlined">
+          <Button onClick={() => selectFiles(true)} startIcon={<UnarchiveIcon />} variant="outlined">
             Добавить данные для упаковки
-            <input type="file" hidden multiple onChange={(e) => {
-              const paths = Array.from(e.target.files || []).map(f => api.getPathForFile(f)).filter(Boolean);
-              if (paths.length) {
-                setMode('pack');
-                setRawPaths(prev => Array.from(new Set([...prev, ...paths])));
-              }
-              e.target.value = '';
-            }} />
           </Button>
           <Button startIcon={<CreateNewFolderIcon />} onClick={async () => {
             const r = await api.selectFolders();

@@ -3,5 +3,5 @@
   "identifier": "component-apps",
   "description": "Tauri API access for migrated local componentapps",
   "windows": ["component-*"],
-  "permissions": ["core:default", "opener:default"]
+  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save", "opener:default"]
 }

@@ -1,17 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { createServer } from 'node:net';
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { WebSocket } from 'ws';
 import {
   DEFAULT_THEME_SETTINGS,
   handleRequest,
   listPrograms,
   startFileServer,
 } from './bridge.mjs';
+import { zipAndSplit } from '../componentapps/omni-archiver/zip.js';
 import buildComponentApps from '../main/vite_build.js';
 import { resolveForDisplay } from '../src/viewRuntime/paths.js';
+
+async function getAvailablePort() {
+  const server = createServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}
 
 test('resolves bundled public assets for Tauri without changing legacy file URLs', () => {
   const previousWindow = globalThis.window;
@@ -365,6 +376,184 @@ test('preserves the legacy Chonky and Monaco file IPC contracts', async () => {
     );
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('adapts NetworkManager Wi-Fi requests and reports unsupported Bluetooth explicitly', async () => {
+  const calls = [];
+  const context = {
+    projectRoot: process.cwd(),
+    wifi: {
+      scan: async () => [{ ssid: 'Office', quality: 81 }],
+      connect: async (connection) => calls.push(connection),
+      disconnect: async () => undefined,
+      getCurrentConnections: async () => [{ ssid: 'Office' }],
+    },
+  };
+  const request = (channel, args = []) => handleRequest({
+    method: 'componentapp-ipc',
+    payload: { appId: 'NetworkManager', channel, args, windowId: 'component-network-test' },
+  }, context);
+
+  assert.deepEqual(await request('wifi:scan'), {
+    success: true,
+    data: [{ ssid: 'Office', quality: 81, displaySsid: 'Office' }],
+  });
+  assert.deepEqual(await request('wifi:connect', ['Office', 'secret']), { success: true });
+  assert.deepEqual(calls, [{ ssid: 'Office', password: 'secret' }]);
+  assert.deepEqual(await request('wifi:status'), {
+    success: true,
+    data: { ssid: 'Office' },
+  });
+  const bluetooth = await request('bluetooth:start-scan');
+  assert.equal(bluetooth.success, false);
+  assert.match(bluetooth.error, /Bluetooth/);
+});
+
+test('routes validated power-menu actions to the native power backend', async () => {
+  const calls = [];
+  const context = {
+    projectRoot: 'C:\\Omniscience',
+    platform: 'win32',
+    systemRoot: 'D:\\Windows',
+    nativeWindowHost: {
+      async request(action) {
+        calls.push({ action });
+        return true;
+      },
+    },
+    async execFileAsync(executable, args, options) {
+      calls.push({ executable, args, options });
+      return {};
+    },
+  };
+  const request = (action) => handleRequest({
+    method: 'componentapp-ipc',
+    payload: {
+      appId: 'power-menu',
+      channel: 'power-menu:execute',
+      args: [{ action }],
+      windowId: 'component-power-menu-test',
+    },
+  }, context);
+
+  assert.deepEqual(await request('restart'), { ok: true });
+  assert.deepEqual(await request('sleep'), { ok: true });
+  assert.deepEqual(calls, [
+    {
+      executable: path.join('D:\\Windows', 'System32', 'shutdown.exe'),
+      args: ['/r', '/t', '0'],
+      options: { windowsHide: true, timeout: 10000 },
+    },
+    { action: 'suspend' },
+  ]);
+  await assert.rejects(request('run-command'), /Unsupported power action/);
+  assert.equal(calls.length, 2);
+});
+
+test('starts and stops a Min WebSocket relay for an individual component window', async () => {
+  const port = await getAvailablePort();
+  const context = { projectRoot: process.cwd() };
+  const request = (channel, args = []) => handleRequest({
+    method: 'componentapp-ipc',
+    payload: { appId: 'Min', channel, args, windowId: 'component-min-test' },
+  }, context);
+  let host;
+  let peer;
+  try {
+    assert.deepEqual(await request('start-server', [port]), { success: true, port });
+    host = new WebSocket(`ws://127.0.0.1:${port}`);
+    peer = new WebSocket(`ws://127.0.0.1:${port}`);
+    await Promise.all([
+      new Promise((resolve, reject) => {
+        host.once('open', resolve);
+        host.once('error', reject);
+      }),
+      new Promise((resolve, reject) => {
+        peer.once('open', resolve);
+        peer.once('error', reject);
+      }),
+    ]);
+    const received = new Promise((resolve) => peer.once('message', (message) => resolve(message.toString())));
+    host.send('relay-check');
+    assert.equal(await received, 'relay-check');
+  } finally {
+    await request('stop-server');
+    host?.close();
+    peer?.close();
+  }
+});
+
+test('provides archiver enumeration and safely removes output-path probes', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-archiver-ipc-'));
+  const sourcePath = path.join(root, 'sample.txt');
+  const outputPath = path.join(root, 'output');
+  try {
+    await writeFile(sourcePath, 'archive input');
+    const context = { projectRoot: process.cwd() };
+    const request = (channel, args = []) => handleRequest({
+      method: 'componentapp-ipc',
+      payload: { appId: 'omni-archiver', channel, args, windowId: 'component-archiver-test' },
+    }, context);
+
+    const listing = await request('enumerate', [[sourcePath]]);
+    assert.equal(listing.ok, true);
+    assert.deepEqual(listing.files.map(({ source, size }) => ({ source, size })), [
+      { source: sourcePath, size: Buffer.byteLength('archive input') },
+    ]);
+
+    const resolved = await request('resolve-output-path', [outputPath]);
+    assert.deepEqual(resolved, { ok: true, path: outputPath });
+    assert.deepEqual(await (await import('node:fs/promises')).readdir(outputPath), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('creates archive fragments with the bundled archiver backend', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-zip-test-'));
+  try {
+    const vhdPath = path.join(root, 'input.vhd');
+    const outputDir = path.join(root, 'fragments');
+    await writeFile(vhdPath, Buffer.alloc(1024, 7));
+    await mkdir(outputDir, { recursive: true });
+    const result = await zipAndSplit({
+      vhdPath,
+      outputDir,
+      baseName: 'test',
+      maxSizeBytes: 1024 * 1024,
+      renameToTxt: false,
+      onProgress: () => undefined,
+      signal: new AbortController().signal,
+    });
+    assert.equal(result.count, 1);
+    assert.equal(await stat(result.fragments[0].path).then((info) => info.isFile()), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('provides an isolated PTY session for the xterm component app', async () => {
+  const instanceId = 'component-xterm-test';
+  const request = (channel, args = []) => handleRequest({
+    method: 'componentapp-ipc',
+    payload: { appId: 'xterm', channel, args, windowId: instanceId },
+  }, { projectRoot: process.cwd() });
+  await request('terminal-start');
+  try {
+    await request('terminal-input', ['echo OMNI_PTY_OK\r']);
+    let output = '';
+    const deadline = Date.now() + 5000;
+    while (!output.includes('OMNI_PTY_OK') && Date.now() < deadline) {
+      const result = await request('terminal-poll');
+      output += result.data.join('');
+      if (!output.includes('OMNI_PTY_OK')) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    assert.match(output, /OMNI_PTY_OK/);
+  } finally {
+    await request('terminal-exit');
   }
 });
 
@@ -936,17 +1125,18 @@ test('opens built componentapps in trusted Tauri asset windows', async () => {
     platform: 'win32',
   };
   try {
-    for (const appName of ['create-item', 'rename', 'settings', 'windows-settings']) {
+    for (const appName of ['create-item', 'power-menu', 'rename', 'settings', 'windows-settings']) {
       await mkdir(path.join(root, 'componentapps', appName), { recursive: true });
       await writeFile(path.join(root, 'componentapps', appName, 'index.html'), '<html></html>');
     }
-    for (const appName of ['create-item', 'rename', 'windows-settings']) {
+    for (const appName of ['create-item', 'power-menu', 'rename', 'windows-settings']) {
       await mkdir(path.join(root, 'dist', 'componentapps', appName), { recursive: true });
       await writeFile(path.join(root, 'dist', 'componentapps', appName, 'index.html'), '<html></html>');
     }
 
     const programs = await handleRequest({ method: 'list-programs' }, context);
     assert.equal(programs.find(({ id }) => id === 'componentapps:create-item').launchable, true);
+    assert.equal(programs.find(({ id }) => id === 'componentapps:power-menu').launchable, true);
     assert.equal(programs.find(({ id }) => id === 'componentapps:rename').launchable, true);
     assert.equal(programs.find(({ id }) => id === 'componentapps:windows-settings').launchable, true);
     assert.equal(programs.find(({ id }) => id === 'componentapps:settings').launchable, false);
@@ -960,6 +1150,18 @@ test('opens built componentapps in trusted Tauri asset windows', async () => {
       name: 'create-item',
       icon: null,
       appPath: 'omniscience/componentapps/create-item/index.html',
+      themeSettings: context.themeSettings,
+    });
+
+    const powerMenuProgram = await handleRequest({
+      method: 'open-program',
+      payload: { programId: 'componentapps:power-menu' },
+    }, context);
+    assert.deepEqual(powerMenuProgram, {
+      kind: 'componentapp',
+      name: 'power-menu',
+      icon: null,
+      appPath: 'omniscience/componentapps/power-menu/index.html',
       themeSettings: context.themeSettings,
     });
 

@@ -1,4 +1,5 @@
 import { invoke, listen, nodeRequest, type ProgramWindow } from './tauri';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 type ManagedWindow = ProgramWindow & {
   id: string;
@@ -238,8 +239,33 @@ async function dispatch(channel: string, payload: Record<string, unknown> = {}) 
         programId: 'componentapps:windows-settings',
         params: {},
       });
-    case 'topbar:toggle-power-menu':
-      throw new Error('The power menu is not migrated yet');
+    case 'topbar:toggle-power-menu': {
+      const windows = await invoke<ProgramWindow[]>('list_program_windows');
+      const existing = windows.find((item) => item.title === 'power-menu');
+      if (existing) {
+        return invoke('manage_program_window', { label: existing.label, action: 'close' });
+      }
+      return invoke('open_program', {
+        programId: 'componentapps:power-menu',
+        params: {},
+      });
+    }
+    case 'power-menu:close':
+      return getCurrentWindow().close();
+    case 'power-menu:execute': {
+      const action = payload.action;
+      if (!['logout', 'shutdown', 'restart', 'sleep'].includes(String(action))) {
+        throw new Error('Unsupported power action');
+      }
+      const result = await invoke<{ ok: boolean }>('componentapp_request', {
+        appId: 'power-menu',
+        method: channel,
+        payload: [payload],
+      });
+      if (!result.ok) throw new Error('The system did not accept the power action');
+      await getCurrentWindow().close();
+      return result;
+    }
     case 'topbar:open-status':
       throw new Error('The development host is not migrated yet');
     default:

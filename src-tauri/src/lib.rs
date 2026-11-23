@@ -732,6 +732,7 @@ fn component_app_init_script(
     }
   };
   const watchedDirectories = new Map();
+  __OMNI_COMPONENTAPP_API__
   window.electron_desktop_API = {
     platform: "__OMNI_PLATFORM__",
     getProjectRoot: () => invoke("health", {}).then((result) => result.projectRoot),
@@ -815,11 +816,154 @@ fn component_app_init_script(
     } else {
         ""
     };
+    let componentapp_api = match app_id.as_str() {
+        "NetworkManager" => r#"
+  const bluetoothListeners = new Map();
+  window.electron_network_API = {
+    scanWifi: () => componentInvoke("wifi:scan"),
+    connectWifi: (ssid, password) => componentInvoke("wifi:connect", ssid, password),
+    disconnectWifi: () => componentInvoke("wifi:disconnect"),
+    getWifiStatus: () => componentInvoke("wifi:status"),
+    startHotspot: (ssid, password) => componentInvoke("wifi:start-hotspot", ssid, password),
+    stopHotspot: () => componentInvoke("wifi:stop-hotspot"),
+    startBluetoothScan: () => componentInvoke("bluetooth:start-scan"),
+    connectBluetooth: (address) => componentInvoke("bluetooth:connect", address),
+    disconnectBluetooth: () => componentInvoke("bluetooth:disconnect"),
+    onBluetoothDeviceFound: (callback) => {
+      const listeners = bluetoothListeners.get("device-found") || new Set();
+      listeners.add(callback);
+      bluetoothListeners.set("device-found", listeners);
+      return () => listeners.delete(callback);
+    },
+    onBluetoothScanFinished: (callback) => {
+      const listeners = bluetoothListeners.get("scan-finished") || new Set();
+      listeners.add(callback);
+      bluetoothListeners.set("scan-finished", listeners);
+      return () => listeners.delete(callback);
+    },
+  };
+"#,
+        "Min" => r#"
+  const serverStartedListeners = new Set();
+  window.electron_min_API = {
+    sendNotification: (title, body) => {
+      if (!("Notification" in window)) return;
+      const show = () => new Notification(title, { body });
+      if (Notification.permission === "granted") show();
+      else if (Notification.permission === "default") {
+        void Notification.requestPermission().then((permission) => {
+          if (permission === "granted") show();
+        });
+      }
+    },
+    startServer: (port) => {
+      void componentInvoke("start-server", port).then((result) => {
+        if (!result?.success) throw new Error(result?.error || "Не удалось запустить сервер");
+        for (const listener of serverStartedListeners) listener(null, result.port);
+      }).catch((error) => {
+        for (const listener of serverStartedListeners) {
+          listener(error instanceof Error ? error.message : String(error));
+        }
+      });
+    },
+    stopServer: () => componentInvoke("stop-server"),
+    onServerStarted: (callback) => {
+      serverStartedListeners.add(callback);
+      return () => serverStartedListeners.delete(callback);
+    },
+    removeServerListeners: () => serverStartedListeners.clear(),
+  };
+"#,
+        "omni-archiver" => r#"
+  const archiverProgressListeners = new Set();
+  let archiverJobId = null;
+  const delay = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+  const runArchiverJob = async (channel, options) => {
+    try {
+      const started = await componentInvoke(channel, options);
+      if (!started?.ok) return started;
+      archiverJobId = started.jobId;
+      while (archiverJobId) {
+        await delay(200);
+        const status = await componentInvoke("omni-archiver:poll", archiverJobId);
+        for (const progress of status.progress || []) {
+          for (const listener of archiverProgressListeners) listener(progress);
+        }
+        if (status.done) {
+          archiverJobId = null;
+          return status.result;
+        }
+      }
+      return { ok: false, error: "Задача прервана" };
+    } catch (error) {
+      archiverJobId = null;
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  };
+  window.electron_omniArchiver_API = {
+    getPathForFile: (file) => file?.path || null,
+    resolveOutputPath: (path) => componentInvoke("omni-archiver:resolve-output-path", path),
+    readClipboard: () => componentInvoke("omni-archiver:read-clipboard"),
+    saveTextToTemp: (text) => componentInvoke("omni-archiver:save-text-to-temp", text),
+    enumerate: (paths) => componentInvoke("omni-archiver:enumerate", paths),
+    start: (options) => runArchiverJob("omni-archiver:start", options),
+    cancel: () => archiverJobId
+      ? componentInvoke("omni-archiver:cancel", archiverJobId)
+      : Promise.resolve({ ok: false, error: "Нет активной задачи" }),
+    onProgress: (callback) => {
+      archiverProgressListeners.add(callback);
+      return () => archiverProgressListeners.delete(callback);
+    },
+    unpackFragments: (options) => runArchiverJob("omni-archiver:unpack-fragments", options),
+    unpackVhd: (options) => runArchiverJob("omni-archiver:unpack-vhd", options),
+  };
+"#,
+        "xterm" => r#"
+  const terminalListeners = new Map();
+  const terminalPollers = new Map();
+  window.electron_componentapp_xterm_API = {
+    on: (event, callback) => {
+      const listeners = terminalListeners.get(event) || new Set();
+      listeners.add(callback);
+      terminalListeners.set(event, listeners);
+      if (event === "terminal-data" && !terminalPollers.has(event)) {
+        const timer = window.setInterval(async () => {
+          try {
+            const result = await componentInvoke("terminal-poll");
+            for (const data of result.data || []) {
+              for (const listener of terminalListeners.get(event) || []) listener(data);
+            }
+          } catch (error) {
+            console.error("[xterm] terminal polling failed:", error);
+          }
+        }, 80);
+        terminalPollers.set(event, timer);
+      }
+      return () => {
+        listeners.delete(callback);
+        if (listeners.size === 0) {
+          terminalListeners.delete(event);
+          const timer = terminalPollers.get(event);
+          if (timer !== undefined) window.clearInterval(timer);
+          terminalPollers.delete(event);
+        }
+      };
+    },
+    send: (event, data) => {
+      void componentInvoke(event, data).catch((error) => {
+        console.error(`[xterm] ${event} failed:`, error);
+      });
+    },
+  };
+"#,
+        _ => "",
+    };
     let component_script = script
         .replace("__OMNI_APP_ID__", &app_id)
         .replace("__OMNI_PARAMS__", &params)
         .replace("__OMNI_PLATFORM__", platform)
-        .replace("__OMNI_WINDOWS_SETTINGS_API__", windows_settings_api);
+        .replace("__OMNI_WINDOWS_SETTINGS_API__", windows_settings_api)
+        .replace("__OMNI_COMPONENTAPP_API__", componentapp_api);
     Ok(format!("{theme_script}\n{component_script}"))
 }
 
@@ -1196,6 +1340,7 @@ fn set_program_window_bounds(
 async fn open_program(
     app: AppHandle,
     state: State<'_, NodeBridge>,
+    geometry: State<'_, WorkspaceGeometry>,
     program_id: String,
     params: Value,
 ) -> Result<(), String> {
@@ -1228,7 +1373,14 @@ async fn open_program(
             .ok_or_else(|| "Node.js sidecar returned no theme settings".to_string())?;
         let script =
             component_app_init_script(name, &params, theme_settings, name == "windows-settings")?;
-        let (width, height) = if name == "windows-settings" {
+        let is_power_menu = name == "power-menu";
+        let (width, height) = if is_power_menu {
+            let top = geometry.panel.y + geometry.panel.height;
+            (
+                geometry.screen.width,
+                (geometry.screen.y + geometry.screen.height - top).max(1.0),
+            )
+        } else if name == "windows-settings" {
             (1120.0, 800.0)
         } else {
             (400.0, 190.0)
@@ -1244,6 +1396,19 @@ async fn open_program(
         .decorations(false)
         .transparent(true)
         .initialization_script(script);
+        let builder = if is_power_menu {
+            let top = geometry.panel.y + geometry.panel.height;
+            builder
+                .position(geometry.screen.x, top)
+                .resizable(false)
+                .minimizable(false)
+                .maximizable(false)
+                .skip_taskbar(true)
+                .always_on_top(true)
+                .focused(true)
+        } else {
+            builder
+        };
         (label, builder)
     } else {
         let url = result
@@ -1297,6 +1462,7 @@ async fn open_program(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let runtime = start_node_bridge().map_err(std::io::Error::other)?;
@@ -1346,6 +1512,7 @@ pub fn run() {
 
 #[tauri::command]
 async fn componentapp_request(
+    window: WebviewWindow,
     state: State<'_, NodeBridge>,
     app_id: String,
     method: String,
@@ -1358,7 +1525,12 @@ async fn componentapp_request(
     call_node(
         Arc::clone(&state.0),
         "componentapp-ipc".to_string(),
-        json!({ "appId": app_id, "channel": method, "args": payload }),
+        json!({
+            "appId": app_id,
+            "channel": method,
+            "args": payload,
+            "windowId": window.label(),
+        }),
     )
     .await
 }
