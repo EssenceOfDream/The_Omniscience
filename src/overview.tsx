@@ -35,6 +35,7 @@ type HiddenWindow = {
   id: string;
   title: string;
   processName: string | null;
+  icon: string | null;
   minimized: boolean;
   maximized: boolean;
   focused: boolean;
@@ -94,6 +95,15 @@ function OpenWindows() {
               borderRadius: 1,
             }}
           >
+            {item.icon && (
+              <Box
+                component="img"
+                src={item.icon}
+                alt=""
+                draggable={false}
+                sx={{ width: 24, height: 24, objectFit: 'contain', flexShrink: 0 }}
+              />
+            )}
             <Box sx={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {item.title}{item.minimized ? ' (свернуто)' : ''}
             </Box>
@@ -118,6 +128,15 @@ function OpenWindows() {
               borderRadius: 1,
             }}
           >
+            {item.icon && (
+              <Box
+                component="img"
+                src={item.icon}
+                alt=""
+                draggable={false}
+                sx={{ width: 24, height: 24, objectFit: 'contain', flexShrink: 0 }}
+              />
+            )}
             <Box sx={{ flex: 1 }}>{item.title} (скрытое окно)</Box>
             <button onClick={() => manageHidden(item.id, 'focus')}>Показать</button>
             <button onClick={() => manageHidden(

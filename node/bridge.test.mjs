@@ -269,6 +269,7 @@ test('builds the original overview app list from built component and web apps', 
     await writeFile(path.join(root, 'config.json'), JSON.stringify({
       homepageUrl: 'https://example.com',
     }));
+    await writeFile(path.join(root, 'icon.ico'), 'browser-icon');
     await writeFile(path.join(root, 'componentapps', 'apps-list', 'index.html'), '');
     await writeFile(path.join(root, 'componentapps', 'apps-list', 'favicon.png'), 'icon');
     await writeFile(path.join(root, 'webapps', 'music', 'index.html'), '');
@@ -305,6 +306,10 @@ test('builds the original overview app list from built component and web apps', 
     assert.equal(
       apps.find(({ id }) => id === 'apps-list').icon,
       `data:image/png;base64,${Buffer.from('icon').toString('base64')}`,
+    );
+    assert.equal(
+      apps.find(({ id }) => id === 'new-browser-window').icon,
+      `data:image/x-icon;base64,${Buffer.from('browser-icon').toString('base64')}`,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -419,6 +424,14 @@ test('lists Windows Start Menu shortcuts and packaged apps for the shell menu', 
       appData,
       programData,
       systemRoot: 'D:\\Windows',
+      async extractWindowsAppIcons(requests) {
+        return new Map(requests.map((request) => [
+          request.id,
+          {
+            dataUrl: `data:image/png;base64,${Buffer.from(path.basename(request.path)).toString('base64')}`,
+          },
+        ]));
+      },
       async execFileAsync(executable, args, options) {
         calls.push({ executable, args, options });
         return {
@@ -442,6 +455,10 @@ test('lists Windows Start Menu shortcuts and packaged apps for the shell menu', 
       { name: 'Website', launchType: 'shortcut' },
     ]);
     assert.ok(apps.some(({ id }) => id === `native:${path.join(userPrograms, 'Editor.lnk').toLowerCase()}`));
+    assert.equal(
+      apps.find(({ name }) => name === 'Editor').icon,
+      `data:image/png;base64,${Buffer.from('Editor.lnk').toString('base64')}`,
+    );
     assert.equal(calls.length, 1);
     assert.ok(calls[0].args.includes('-Action'));
     assert.equal(calls[0].args.at(-1), 'List');
@@ -483,6 +500,9 @@ test('launches only listed Windows shortcuts and packaged apps', async () => {
     appData,
     programData: path.join(root, 'common'),
     systemRoot: 'D:\\Windows',
+    async extractWindowsAppIcons() {
+      return new Map();
+    },
     spawn(executable, args, options) {
       processCalls.push({ executable, args, options });
       process.nextTick(() => child.emit('spawn'));
@@ -579,6 +599,7 @@ test('opens the configured homepage for the original browser card', async () => 
     await writeFile(path.join(root, 'config.json'), JSON.stringify({
       homepageUrl: 'https://example.com/start',
     }));
+    await writeFile(path.join(root, 'icon.ico'), 'browser-icon');
     const result = await handleRequest({
       method: 'open-program',
       payload: { programId: 'new-browser-window' },
@@ -586,6 +607,10 @@ test('opens the configured homepage for the original browser card', async () => 
     assert.equal(result.kind, 'webapp');
     assert.equal(result.name, 'Браузер');
     assert.equal(result.url, 'https://example.com/start');
+    assert.equal(
+      result.icon,
+      `data:image/x-icon;base64,${Buffer.from('browser-icon').toString('base64')}`,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -668,6 +693,45 @@ test('adapts Node directory data for the existing desktop file grid', async () =
   }
 });
 
+test('returns cached Windows shell icons for desktop files and folders', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-desktop-icons-'));
+  const filePath = path.join(root, 'sample.txt');
+  const directoryPath = path.join(root, 'folder');
+  const iconRequests = [];
+  const context = {
+    projectRoot: root,
+    platform: 'win32',
+    async extractWindowsAppIcons(requests) {
+      iconRequests.push(requests);
+      return new Map(requests.map((request) => [
+        request.id,
+        { dataUrl: `data:image/png;base64,${Buffer.from(path.basename(request.path)).toString('base64')}` },
+      ]));
+    },
+  };
+  try {
+    await writeFile(filePath, 'content');
+    await mkdir(directoryPath);
+    const [fileIcon, folderIcon] = await Promise.all([
+      handleRequest({ method: 'get-file-icon', payload: { path: filePath } }, context),
+      handleRequest({ method: 'get-file-icon', payload: { path: directoryPath } }, context),
+    ]);
+
+    assert.deepEqual(fileIcon, {
+      success: true,
+      fileUrl: `data:image/png;base64,${Buffer.from('sample.txt').toString('base64')}`,
+    });
+    assert.deepEqual(folderIcon, {
+      success: true,
+      fileUrl: `data:image/png;base64,${Buffer.from('folder').toString('base64')}`,
+    });
+    assert.equal(iconRequests.length, 1);
+    assert.equal(iconRequests[0].length, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('returns an explicit error for unknown sidecar methods', async () => {
   await assert.rejects(
     handleRequest({ method: 'delete-everything' }, 'C:\\Omniscience'),
@@ -680,6 +744,12 @@ test('lists and controls only windows hidden from the Windows taskbar', async ()
   const context = {
     projectRoot: 'C:\\Omniscience',
     platform: 'win32',
+    async extractWindowsAppIcons(requests) {
+      return new Map(requests.map((request) => [
+        request.id,
+        { dataUrl: 'data:image/png;base64,hidden-window' },
+      ]));
+    },
     nativeWindowHost: {
       async request(action, payload) {
         requests.push({ action, payload });
@@ -708,6 +778,7 @@ test('lists and controls only windows hidden from the Windows taskbar', async ()
     id: '101',
     title: 'Hidden player',
     processName: 'player',
+    icon: 'data:image/png;base64,hidden-window',
     pid: 12,
     minimized: true,
     maximized: false,
@@ -757,6 +828,12 @@ test('lists and controls visible native app windows for the window controls', as
   const context = {
     projectRoot: 'C:\\Omniscience',
     platform: 'win32',
+    async extractWindowsAppIcons(requests) {
+      return new Map(requests.map((request) => [
+        request.id,
+        { dataUrl: 'data:image/png;base64,visible-window' },
+      ]));
+    },
     nativeWindowHost: {
       async request(action, payload) {
         requests.push({ action, payload });
@@ -794,6 +871,7 @@ test('lists and controls visible native app windows for the window controls', as
     processName: 'visible',
     focused: true,
   }]);
+  assert.equal(windows[0].icon, 'data:image/png;base64,visible-window');
 
   await handleRequest({
     method: 'manage-native-window',
@@ -868,6 +946,7 @@ test('opens built componentapps in trusted Tauri asset windows', async () => {
     assert.deepEqual(result, {
       kind: 'componentapp',
       name: 'create-item',
+      icon: null,
       appPath: 'omniscience/componentapps/create-item/index.html',
       themeSettings: context.themeSettings,
     });
@@ -879,6 +958,7 @@ test('opens built componentapps in trusted Tauri asset windows', async () => {
     assert.deepEqual(settingsProgram, {
       kind: 'componentapp',
       name: 'windows-settings',
+      icon: null,
       appPath: 'omniscience/componentapps/windows-settings/index.html',
       themeSettings: context.themeSettings,
     });

@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     io::{BufRead, BufReader, Write},
     path::PathBuf,
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
@@ -31,6 +32,7 @@ mod componentapp_backends {
 struct ManagedProgramWindow {
     label: String,
     title: String,
+    icon: Option<String>,
     minimized: bool,
     focused: bool,
     maximized: bool,
@@ -63,6 +65,8 @@ impl Drop for NodeRuntime {
 }
 
 struct NodeBridge(Arc<Mutex<NodeRuntime>>);
+
+struct ProgramWindowIcons(Mutex<HashMap<String, String>>);
 
 struct ThemeSettingsState(Mutex<Value>);
 
@@ -895,7 +899,15 @@ fn close_overview(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn list_program_windows(app: AppHandle) -> Result<Vec<ManagedProgramWindow>, String> {
+fn list_program_windows(
+    app: AppHandle,
+    icons: State<'_, ProgramWindowIcons>,
+) -> Result<Vec<ManagedProgramWindow>, String> {
+    let icons = icons
+        .0
+        .lock()
+        .map_err(|_| "Program window icon state is unavailable".to_string())?
+        .clone();
     let mut windows = app
         .webview_windows()
         .into_iter()
@@ -913,6 +925,7 @@ fn list_program_windows(app: AppHandle) -> Result<Vec<ManagedProgramWindow>, Str
                 .map_err(|error| format!("Could not read window size: {error}"))?
                 .to_logical::<f64>(scale_factor);
             Ok(ManagedProgramWindow {
+                icon: icons.get(&label).cloned(),
                 label,
                 title: window
                     .title()
@@ -1130,6 +1143,10 @@ async fn open_program(
         .get("name")
         .and_then(Value::as_str)
         .ok_or_else(|| "Node.js sidecar returned no program name".to_string())?;
+    let icon = result
+        .get("icon")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let window_id = PROGRAM_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
     let kind = result
         .get("kind")
@@ -1182,8 +1199,23 @@ async fn open_program(
     let window = builder
         .build()
         .map_err(|error| format!("Could not open {label}: {error}"))?;
+    if let Some(icon) = icon {
+        app.state::<ProgramWindowIcons>()
+            .0
+            .lock()
+            .map_err(|_| "Program window icon state is unavailable".to_string())?
+            .insert(label.clone(), icon);
+    }
     let app_handle = app.clone();
+    let window_label = label.clone();
     window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            if let Some(icons) = app_handle.try_state::<ProgramWindowIcons>() {
+                if let Ok(mut icons) = icons.0.lock() {
+                    icons.remove(&window_label);
+                }
+            }
+        }
         if matches!(
             event,
             tauri::WindowEvent::Destroyed | tauri::WindowEvent::Focused(_)
@@ -1203,6 +1235,7 @@ pub fn run() {
         .setup(|app| {
             let runtime = start_node_bridge().map_err(std::io::Error::other)?;
             app.manage(NodeBridge(Arc::new(Mutex::new(runtime))));
+            app.manage(ProgramWindowIcons(Mutex::new(HashMap::new())));
             let theme_settings = {
                 let node_bridge = app.state::<NodeBridge>();
                 let mut runtime = node_bridge

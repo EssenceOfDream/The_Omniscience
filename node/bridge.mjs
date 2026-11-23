@@ -27,9 +27,19 @@ import {
 
 const categories = ['componentapps', 'webapps', 'extensions'];
 const execFileAsync = promisify(execFile);
+const defaultWindowsIconState = {
+  cache: new Map(),
+  pending: new Map(),
+  queued: new Map(),
+  flushScheduled: false,
+};
 const windowsUwpHostPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../main/windowsUwpHost.ps1',
+);
+const windowsAppIconHostPath = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../main/windowsAppIcons.ps1',
 );
 const windowsSettingsCategories = Object.freeze({
   system: ['sysdm.cpl'],
@@ -174,6 +184,155 @@ async function isDirectory(filePath) {
   }
 }
 
+async function extractWindowsAppIcons(requests, context = {}) {
+  if (requests.length === 0) return new Map();
+  if (typeof context.extractWindowsAppIcons === 'function') {
+    return context.extractWindowsAppIcons(requests);
+  }
+
+  const systemRoot = typeof context === 'string'
+    ? process.env.SystemRoot ?? 'C:\\Windows'
+    : context.systemRoot ?? process.env.SystemRoot ?? 'C:\\Windows';
+  const powershellPath = path.join(
+    systemRoot,
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe',
+  );
+  const output = await new Promise((resolve, reject) => {
+    const child = spawn(powershellPath, [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', windowsAppIconHostPath,
+    ], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const stdout = [];
+    const stderr = [];
+    let outputBytes = 0;
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill();
+      reject(new Error('Windows app icon extraction timed out.'));
+    }, 30000);
+
+    child.stdout.on('data', (chunk) => {
+      outputBytes += chunk.length;
+      if (outputBytes > 48 * 1024 * 1024 && !settled) {
+        settled = true;
+        clearTimeout(timeout);
+        child.kill();
+        reject(new Error('Windows app icon extraction output exceeded the limit.'));
+        return;
+      }
+      stdout.push(chunk);
+    });
+    child.stderr.on('data', (chunk) => stderr.push(chunk));
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (code !== 0) {
+        reject(new Error(Buffer.concat(stderr).toString('utf8')
+          || `PowerShell exited with code ${code}.`));
+        return;
+      }
+      resolve(Buffer.concat(stdout).toString('utf8'));
+    });
+    child.stdin.on('error', (error) => {
+      if (settled || error.code === 'EPIPE') return;
+      settled = true;
+      clearTimeout(timeout);
+      child.kill();
+      reject(error);
+    });
+    child.stdin.end(JSON.stringify({ requests }), 'utf8');
+  });
+
+  let entries;
+  try {
+    const parsed = JSON.parse(output);
+    entries = Array.isArray(parsed) ? parsed : [parsed];
+  } catch (error) {
+    throw new Error(`Could not parse Windows app icon extraction response: ${error.message}`);
+  }
+  return new Map(entries.map((entry) => [entry.id, entry]));
+}
+
+function getWindowsIconState(context) {
+  if (typeof context === 'string') return defaultWindowsIconState;
+  if (!context.windowsIconState) {
+    context.windowsIconState = {
+      cache: new Map(),
+      pending: new Map(),
+      queued: new Map(),
+      flushScheduled: false,
+    };
+  }
+  return context.windowsIconState;
+}
+
+function scheduleWindowsIconExtraction(state, context) {
+  if (state.flushScheduled) return;
+  state.flushScheduled = true;
+  setTimeout(() => void flushWindowsIconQueue(state, context), 10);
+}
+
+async function flushWindowsIconQueue(state, context) {
+  state.flushScheduled = false;
+  const queued = [...state.queued.entries()];
+  state.queued.clear();
+  if (queued.length === 0) return;
+
+  let extracted = new Map();
+  try {
+    extracted = await extractWindowsAppIcons(
+      queued.map(([key, request]) => ({ id: key, path: request.path })),
+      context,
+    );
+  } catch (error) {
+    console.error('[tauri-icons] Windows app icon extraction failed:', error.message);
+  }
+
+  for (const [key, request] of queued) {
+    const result = extracted.get(key);
+    if (result?.error) {
+      console.warn('[tauri-icons] could not extract icon:', request.path, result.error);
+    }
+    const icon = result?.dataUrl || null;
+    state.cache.set(key, icon);
+    state.pending.delete(key);
+    request.resolve(icon);
+  }
+
+  if (state.queued.size > 0) scheduleWindowsIconExtraction(state, context);
+}
+
+async function getWindowsIcons(requests, context = {}) {
+  const state = getWindowsIconState(context);
+  const icons = await Promise.all(requests.map((request) => {
+    const key = request.path.toLowerCase();
+    if (state.cache.has(key)) return state.cache.get(key);
+    if (state.pending.has(key)) return state.pending.get(key);
+
+    let resolve;
+    const pending = new Promise((complete) => {
+      resolve = complete;
+    });
+    state.pending.set(key, pending);
+    state.queued.set(key, { ...request, resolve });
+    scheduleWindowsIconExtraction(state, context);
+    return pending;
+  }));
+  return new Map(requests.map((request, index) => [request.id, icons[index] || null]));
+}
+
 export async function getUserDirectories() {
   const home = os.homedir();
   const desktop = path.join(home, 'Desktop');
@@ -201,6 +360,32 @@ function absoluteComponentappPath(value) {
     throw new Error('An absolute file path is required');
   }
   return path.resolve(value);
+}
+
+function absoluteFilePath(value) {
+  if (typeof value !== 'string' || !path.isAbsolute(value)) {
+    throw new Error('An absolute file path is required');
+  }
+  return path.resolve(value);
+}
+
+async function getFileIcon(payload, context) {
+  const filePath = absoluteFilePath(payload?.path);
+  const info = await stat(filePath);
+  if (!info.isFile() && !info.isDirectory()) {
+    return { success: false, fileUrl: null };
+  }
+
+  const platform = typeof context === 'string'
+    ? process.platform
+    : context.platform ?? process.platform;
+  if (platform !== 'win32') {
+    return { success: false, fileUrl: null };
+  }
+
+  const icons = await getWindowsIcons([{ id: 'desktop-file-icon', path: filePath }], context);
+  const fileUrl = icons.get('desktop-file-icon') || null;
+  return { success: Boolean(fileUrl), fileUrl };
 }
 
 async function getChonkyFolders(projectRoot, platform) {
@@ -342,11 +527,12 @@ async function getNativeWindows(context) {
   return Array.isArray(result) ? result : result ? [result] : [];
 }
 
-function mapNativeWindow(window) {
+function mapNativeWindow(window, icon = null) {
   return {
     id: String(window.id),
     title: window.title || window.processName || 'Окно',
     processName: path.basename(window.imagePath || '').replace(/\.[^.]+$/, '') || null,
+    icon,
     pid: Number(window.pid) || null,
     minimized: Boolean(window.minimized),
     maximized: Boolean(window.maximized),
@@ -356,9 +542,12 @@ function mapNativeWindow(window) {
 
 async function listHiddenWindows(context) {
   const windows = await getNativeWindows(context);
-  return windows
-    .filter((window) => window.taskbarHidden === true)
-    .map(mapNativeWindow)
+  const hiddenWindows = windows.filter((window) => window.taskbarHidden === true);
+  const icons = await getWindowsIcons(hiddenWindows
+    .filter((window) => typeof window.imagePath === 'string' && window.imagePath)
+    .map((window) => ({ id: String(window.id), path: window.imagePath })), context);
+  return hiddenWindows
+    .map((window) => mapNativeWindow(window, icons.get(String(window.id)) || null))
     .sort((left, right) =>
       (left.processName || left.title).localeCompare(right.processName || right.title)
       || left.title.localeCompare(right.title));
@@ -366,10 +555,14 @@ async function listHiddenWindows(context) {
 
 async function listNativeWindows(context) {
   const windows = await getNativeWindows(context);
-  return windows
-    .filter((window) => window.visible === true && window.taskbarHidden !== true)
+  const visibleWindows = windows
+    .filter((window) => window.visible === true && window.taskbarHidden !== true);
+  const icons = await getWindowsIcons(visibleWindows
+    .filter((window) => typeof window.imagePath === 'string' && window.imagePath)
+    .map((window) => ({ id: String(window.id), path: window.imagePath })), context);
+  return visibleWindows
     .map((window) => ({
-      ...mapNativeWindow(window),
+      ...mapNativeWindow(window, icons.get(String(window.id)) || null),
       x: window.x,
       y: window.y,
       width: window.width,
@@ -607,6 +800,7 @@ async function collectStartMenuShortcuts(directory, apps, seen) {
       name: path.basename(entry.name, extension),
       launchType: 'shortcut',
       launchTarget: filePath,
+      icon: null,
     });
   }
 }
@@ -633,6 +827,16 @@ async function listNativeApps(context = {}) {
   const seen = new Set();
   for (const directory of startMenuDirectories) {
     await collectStartMenuShortcuts(directory, apps, seen);
+  }
+  const shortcutIcons = await getWindowsIcons(
+    apps.filter((app) => app.launchType === 'shortcut').map((app) => ({
+      id: app.id,
+      path: app.launchTarget,
+    })),
+    context,
+  );
+  for (const app of apps) {
+    if (app.launchType === 'shortcut') app.icon = shortcutIcons.get(app.id) || null;
   }
 
   const systemRoot = context.systemRoot ?? process.env.SystemRoot ?? 'C:\\Windows';
@@ -661,6 +865,7 @@ async function listNativeApps(context = {}) {
       name: app.title,
       launchType: 'uwp',
       launchTarget: app.appUserModelId,
+      icon: null,
     });
   }
 
@@ -888,6 +1093,16 @@ async function getProgramIcon(projectRoot, category, name) {
   return null;
 }
 
+async function getProjectIcon(projectRoot) {
+  try {
+    const icon = await readFile(path.join(projectRoot, 'icon.ico'));
+    return `data:image/x-icon;base64,${icon.toString('base64')}`;
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
+    throw error;
+  }
+}
+
 async function getHomepageUrl(projectRoot) {
   try {
     const config = JSON.parse(await readFile(path.join(projectRoot, 'config.json'), 'utf8'));
@@ -905,7 +1120,7 @@ async function getOverviewApps(projectRoot, platform) {
     type: 'browser',
     title: 'Браузер',
     url: homepageUrl || null,
-    icon: null,
+    icon: await getProjectIcon(projectRoot),
     launchable: Boolean(homepageUrl),
   }];
   const programs = await listPrograms(projectRoot, platform);
@@ -963,13 +1178,15 @@ export async function handleRequest(request, context) {
   }
   if (request?.method === 'list-native-apps') {
     const apps = await listNativeApps(context);
-    return apps.map(({ id, name, launchType }) => ({
+    return apps.map(({ id, name, launchType, icon }) => ({
       id,
       name,
+      title: name,
       category: 'native',
       entryPoint: null,
       launchable: true,
       launchType,
+      icon,
     }));
   }
   if (request?.method === 'launch-native-app') {
@@ -996,6 +1213,7 @@ export async function handleRequest(request, context) {
         kind: 'webapp',
         name: 'Браузер',
         url: homepageUrl,
+        icon: await getProjectIcon(projectRoot),
         themeSettings: typeof context === 'string'
           ? { ...DEFAULT_THEME_SETTINGS }
           : context.themeSettings ?? { ...DEFAULT_THEME_SETTINGS },
@@ -1018,6 +1236,7 @@ export async function handleRequest(request, context) {
       return {
         kind: 'componentapp',
         name: program.name,
+        icon: await getProgramIcon(projectRoot, program.category, program.name),
         appPath: path.posix.join(
           'omniscience',
           program.category,
@@ -1035,10 +1254,14 @@ export async function handleRequest(request, context) {
       kind: 'webapp',
       name: program.name,
       url: `${context.fileServerUrl}/${program.category}/${encodeURIComponent(program.name)}/index.html`,
+      icon: await getProgramIcon(projectRoot, program.category, program.name),
     };
   }
   if (request?.method === 'list-directory') {
     return listDirectory(request.payload);
+  }
+  if (request?.method === 'get-file-icon') {
+    return getFileIcon(request.payload, context);
   }
   if (request?.method === 'get-user-dirs') {
     return getUserDirectories();

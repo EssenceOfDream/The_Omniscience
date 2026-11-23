@@ -12,6 +12,7 @@ type HiddenWindow = {
   id: string;
   title: string;
   processName: string | null;
+  icon: string | null;
   minimized: boolean;
   maximized: boolean;
   focused: boolean;
@@ -54,7 +55,7 @@ async function getTopbarState(): Promise<TopbarState> {
     nodeRequest<{ platform: string }>('health'),
     invoke<ProgramWindow[]>('list_program_windows'),
     nodeRequest<Array<{ id: string; type: string; title: string; url: string | null; icon: string | null; launchable: boolean }>>('get-apps-list'),
-    nodeRequest<Array<{ id: string; name: string; category: string; launchable: boolean; launchType?: string }>>('list-native-apps'),
+    nodeRequest<Array<{ id: string; name: string; category: string; launchable: boolean; launchType?: string; icon: string | null }>>('list-native-apps'),
   ]);
   platform = health.platform;
   if (window.electron_topbar_API) window.electron_topbar_API.platform = platform;
@@ -63,7 +64,7 @@ async function getTopbarState(): Promise<TopbarState> {
     id: item.label,
     kind: 'our',
     processName: item.title,
-    icon: null,
+    icon: item.icon || null,
   }));
   const nativeWindows = platform === 'win32'
     ? await nodeRequest<HiddenWindow[]>('list-hidden-windows')
@@ -82,7 +83,7 @@ async function getTopbarState(): Promise<TopbarState> {
     width: 0,
     height: 0,
     isHidden: true,
-    icon: null,
+    icon: item.icon,
   }));
 
   return {
@@ -108,6 +109,7 @@ async function getTopbarState(): Promise<TopbarState> {
         kind: 'native',
         launchType: item.launchType,
         launchable: item.launchable,
+        icon: item.icon,
       })),
     ],
     overviewTabs: [
@@ -266,12 +268,13 @@ export function installTopbarBridge() {
       platform,
       invoke: async (channel: string, payload: Record<string, unknown> = {}) => {
         if (channel === 'get-native-apps') {
-          return nodeRequest<Array<{ id: string; name: string; launchType: string }>>('list-native-apps')
+          return nodeRequest<Array<{ id: string; name: string; launchType: string; icon: string | null }>>('list-native-apps')
             .then((items) => items.map((item) => ({
               id: item.id,
               title: item.name,
               kind: 'native',
               launchType: item.launchType,
+              icon: item.icon,
             })));
         }
         if (channel === 'get-extensions-list') return [];

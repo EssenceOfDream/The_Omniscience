@@ -12,6 +12,7 @@ declare global {
 export type ProgramWindow = {
   label: string;
   title: string;
+  icon?: string | null;
   minimized: boolean;
   focused: boolean;
   maximized: boolean;

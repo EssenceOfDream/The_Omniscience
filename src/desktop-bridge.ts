@@ -100,10 +100,8 @@ export function installDesktopBridge() {
     openPath: async (path: string) => {
       await openPath(path);
     },
-    getFileIcon: async (_path: string) => ({
-      success: false,
-      fileUrl: null,
-    }),
+    getFileIcon: (path: string) =>
+      nodeRequest<{ success: boolean; fileUrl: string | null }>('get-file-icon', { path }),
     watchStart: (path: string) => {
       if (watchedDirectories.has(path)) return;
       const timer = window.setInterval(() => {
