@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "component-apps",
+  "description": "Tauri API access for migrated local componentapps",
+  "windows": ["component-*"],
+  "permissions": ["core:default", "opener:default"]
+}

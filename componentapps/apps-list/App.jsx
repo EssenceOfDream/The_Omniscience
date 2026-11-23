@@ -233,6 +233,7 @@ export default function App({ desktopId }) {
     // Нативные программы системы (не наши окна)
     if (app.kind === 'native') {
       desktopApi?.send('launch-native-app', {
+        id: app.id,
         exec: app.exec,
         terminal: app.terminal,
         appUserModelId: app.appUserModelId,

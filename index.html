@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Omniscience desktop</title>
+    <style>
+      html, body, #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: transparent;
+      }
+      #background-root {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        pointer-events: auto;
+      }
+      #desktop-root {
+        position: absolute;
+        top: 72px;
+        inset-inline: 0;
+        bottom: 0;
+        z-index: 1;
+      }
+      #frame-root {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        display: grid;
+        grid-template:
+          "top-left top top-right" 5px
+          "left center right" 1fr
+          "bottom-left bottom bottom-right" 5px
+          / 5px 1fr 5px;
+        pointer-events: none;
+      }
+      .frame-handle { background: transparent; pointer-events: auto; z-index: 10000; }
+      .frame-handle.top-left { grid-area: top-left; cursor: nwse-resize; }
+      .frame-handle.top { grid-area: top; cursor: ns-resize; }
+      .frame-handle.top-right { grid-area: top-right; cursor: nesw-resize; }
+      .frame-handle.left { grid-area: left; cursor: ew-resize; }
+      .frame-handle.right { grid-area: right; cursor: ew-resize; }
+      .frame-handle.bottom-left { grid-area: bottom-left; cursor: nesw-resize; }
+      .frame-handle.bottom { grid-area: bottom; cursor: ns-resize; }
+      .frame-handle.bottom-right { grid-area: bottom-right; cursor: nwse-resize; }
+    </style>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

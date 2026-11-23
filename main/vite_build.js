@@ -153,6 +153,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   }
 
   await build({
+    configFile: false,
     root: rootDir,
     base: './',
     resolve: {

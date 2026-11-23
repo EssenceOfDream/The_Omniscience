@@ -4,32 +4,40 @@ import { Box, TextField, Button, Typography, Stack } from '@mui/material';
 
 function App() {
   const params = new URLSearchParams(window.location.search);
-  const filePath = params.get('filePath') || '';
-  const currentName = params.get('currentName') || '';
+  const initialParams = window.__OMNI_INITIAL_PARAMS__ || {};
+  const filePath = params.get('filePath') || initialParams.filePath || '';
+  const currentName = params.get('currentName') || initialParams.currentName || '';
+  const initialName = initialParams.newName || currentName;
 
-  const [value, setValue] = useState(currentName);
+  const [value, setValue] = useState(initialName);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const inputRef = useRef(null);
+
+  const closeWindow = () => {
+    const close = window.electron_desktop_API?.closeWindow;
+    if (close) close();
+    else window.close();
+  };
 
   useEffect(() => {
     // Фокус + выделяем имя без расширения, как это делает Dolphin
     if (inputRef.current) {
       inputRef.current.focus();
-      const dot = currentName.lastIndexOf('.');
+      const dot = initialName.lastIndexOf('.');
       if (dot > 0) {
         inputRef.current.setSelectionRange(0, dot);
       } else {
         inputRef.current.select();
       }
     }
-  }, [currentName]);
+  }, [initialName]);
 
   const handleConfirm = async () => {
     if (busy) return;
     const trimmed = value.trim();
     if (!trimmed) { setError('Имя не может быть пустым'); return; }
-    if (trimmed === currentName) { window.close(); return; }
+    if (trimmed === currentName) { closeWindow(); return; }
     if (trimmed.includes('/')) { setError('Имя не может содержать «/»'); return; }
 
     setBusy(true);
@@ -39,7 +47,7 @@ function App() {
       setBusy(false);
       return;
     }
-    window.close();
+    closeWindow();
   };
 
   return (
@@ -66,7 +74,7 @@ function App() {
         onChange={(e) => { setValue(e.target.value); setError(''); }}
         onKeyDown={(e) => {
           if (e.key === 'Enter')  { e.preventDefault(); handleConfirm(); }
-          if (e.key === 'Escape') { e.preventDefault(); window.close(); }
+          if (e.key === 'Escape') { e.preventDefault(); closeWindow(); }
         }}
         sx={{
           '& input': { color: '#fff', fontFamily: 'monospace', fontSize: 13 },
@@ -85,7 +93,7 @@ function App() {
       <Stack direction="row" spacing={1} justifyContent="flex-end">
         <Button
           size="small"
-          onClick={() => window.close()}
+          onClick={closeWindow}
           sx={{ color: '#aaa', textTransform: 'none' }}
         >
           Отмена

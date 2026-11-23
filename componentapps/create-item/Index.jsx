@@ -4,26 +4,34 @@ import { Box, TextField, Button, Typography, Stack } from '@mui/material';
 
 function App() {
   const params = new URLSearchParams(window.location.search);
-  const dir = params.get('dir') || '';
-  const kind = params.get('kind') === 'file' ? 'file' : 'folder';
+  const initialParams = window.__OMNI_INITIAL_PARAMS__ || {};
+  const dir = params.get('dir') || initialParams.dir || '';
+  const kind = (params.get('kind') || initialParams.kind) === 'file' ? 'file' : 'folder';
 
   const defaultName = kind === 'folder' ? 'Новая папка' : 'Новый файл.txt';
+  const initialName = initialParams.name || defaultName;
   const titleText = kind === 'folder' ? 'Новая папка' : 'Новый файл';
 
-  const [value, setValue] = useState(defaultName);
+  const [value, setValue] = useState(initialName);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const inputRef = useRef(null);
+
+  const closeWindow = () => {
+    const close = window.electron_desktop_API?.closeWindow;
+    if (close) close();
+    else window.close();
+  };
 
   useEffect(() => {
     if (inputRef.current) {
       inputRef.current.focus();
       // Выделяем базовое имя без расширения (как в rename)
-      const dot = defaultName.lastIndexOf('.');
+      const dot = initialName.lastIndexOf('.');
       if (dot > 0) inputRef.current.setSelectionRange(0, dot);
       else inputRef.current.select();
     }
-  }, [defaultName]);
+  }, [initialName]);
 
   const handleConfirm = async () => {
     if (busy) return;
@@ -47,7 +55,7 @@ function App() {
       setBusy(false);
       return;
     }
-    window.close();
+    closeWindow();
   };
 
   return (
@@ -74,7 +82,7 @@ function App() {
         onChange={(e) => { setValue(e.target.value); setError(''); }}
         onKeyDown={(e) => {
           if (e.key === 'Enter')  { e.preventDefault(); handleConfirm(); }
-          if (e.key === 'Escape') { e.preventDefault(); window.close(); }
+          if (e.key === 'Escape') { e.preventDefault(); closeWindow(); }
         }}
         sx={{
           '& input': { color: '#fff', fontFamily: 'monospace', fontSize: 13 },
@@ -93,7 +101,7 @@ function App() {
       <Stack direction="row" spacing={1} justifyContent="flex-end">
         <Button
           size="small"
-          onClick={() => window.close()}
+          onClick={closeWindow}
           sx={{ color: '#aaa', textTransform: 'none' }}
         >
           Отмена

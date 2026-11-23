@@ -26,7 +26,7 @@ import CloseIcon from '@mui/icons-material/Close';
 const CELL = 20;
 const GAP = 1;
 const MIN_W = 120;
-const MIN_H = 80;
+const MIN_H = 72;
 
 const CURSORS = {
   nw: 'nwse-resize', n: 'ns-resize', ne: 'nesw-resize',
