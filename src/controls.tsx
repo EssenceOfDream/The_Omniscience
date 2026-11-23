@@ -3,6 +3,7 @@ import { createTheme, ThemeProvider } from '@mui/material/styles';
 import ControlWindowContainer from '../componentapps/window-controls/components/ControlWindowContainer';
 import { installTopbarBridge } from './topbar-bridge';
 import { installWindowChrome, mountApp, nodeRequest } from './tauri';
+import './App.css';
 
 const theme = createTheme({
   palette: {

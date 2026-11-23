@@ -13,9 +13,9 @@ function OuterLayer({ opacity, scrollable, children }) {
     <div
       style={{
         position: 'fixed',
-        top: 'var(--frame-size)', left: 'var(--frame-size)', right: 'var(--frame-size)', bottom: 'var(--frame-size)',
-        width: 'calc(100vw - calc(var(--frame-size)) * 2)',
-        height: 'calc(100vh - calc(var(--frame-size)) * 2)',
+        inset: 0,
+        width: '100vw',
+        height: '100vh',
         margin: 0,
         padding: 0,
         border: 'none',

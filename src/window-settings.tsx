@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { installWindowChrome, invoke, mountApp, nodeRequest } from './tauri';
-import './shell.css';
+import './App.css';
 
 type Settings = { label: string; title: string; alwaysOnTop: boolean };
 declare global {

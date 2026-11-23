@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 use tauri::{
-    AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
     WindowEvent,
 };
 
@@ -120,10 +120,27 @@ fn start_node_bridge() -> Result<NodeRuntime, String> {
     })
 }
 
-fn close_workspace_on_window_close(window: &WebviewWindow, app: AppHandle) {
+fn close_workspace_on_window_close(
+    window: &WebviewWindow,
+    app: AppHandle,
+    panel: &WebviewWindow,
+    close_started: Arc<std::sync::atomic::AtomicBool>,
+) {
+    let panel = panel.clone();
     window.on_window_event(move |event| {
-        if matches!(event, WindowEvent::CloseRequested { .. }) {
-            app.exit(0);
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            if close_started.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            let app = app.clone();
+            let panel = panel.clone();
+            thread::spawn(move || {
+                if let Err(error) = remove_windows_panel_dock(&app, &panel) {
+                    eprintln!("[workspace] failed to release panel work area: {error}");
+                }
+                app.exit(0);
+            });
         }
     });
 }
@@ -263,6 +280,122 @@ fn apply_window_bounds(
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn set_windows_shell_layer(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    layer: &str,
+) -> Result<(), String> {
+    let hwnd = window
+        .hwnd()
+        .map_err(|error| {
+            format!(
+                "Could not read the {} window handle: {error}",
+                window.label()
+            )
+        })?
+        .0 as usize;
+    if hwnd == 0 {
+        return Err(format!(
+            "The {} window has an invalid handle",
+            window.label()
+        ));
+    }
+
+    let node_bridge = app.state::<NodeBridge>();
+    let mut runtime = node_bridge
+        .0
+        .lock()
+        .map_err(|_| "Node.js sidecar lock is unavailable".to_string())?;
+    let result = request_node(
+        &mut runtime,
+        "set-shell-window-layer",
+        json!({ "hwnd": hwnd.to_string(), "layer": layer }),
+    )?;
+    if result.as_bool() != Some(true) {
+        return Err(format!(
+            "Could not place the {} window in the {layer} layer",
+            window.label()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_windows_shell_layer(
+    _app: &AppHandle,
+    _window: &WebviewWindow,
+    _layer: &str,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn set_windows_panel_dock(app: &AppHandle, panel: &WebviewWindow) -> Result<(), String> {
+    let hwnd = panel
+        .hwnd()
+        .map_err(|error| format!("Could not read the panel window handle: {error}"))?
+        .0 as usize;
+    let position = panel
+        .outer_position()
+        .map_err(|error| format!("Could not read the panel position: {error}"))?;
+    let size = panel
+        .inner_size()
+        .map_err(|error| format!("Could not read the panel size: {error}"))?;
+    let node_bridge = app.state::<NodeBridge>();
+    let mut runtime = node_bridge
+        .0
+        .lock()
+        .map_err(|_| "Node.js sidecar lock is unavailable".to_string())?;
+    let result = request_node(
+        &mut runtime,
+        "set-shell-panel-dock",
+        json!({
+            "hwnd": hwnd.to_string(),
+            "x": position.x,
+            "y": position.y,
+            "width": size.width,
+            "height": size.height,
+        }),
+    )?;
+    if result.as_bool() != Some(true) {
+        return Err("Could not reserve the workspace panel area".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_windows_panel_dock(_app: &AppHandle, _panel: &WebviewWindow) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn remove_windows_panel_dock(app: &AppHandle, panel: &WebviewWindow) -> Result<(), String> {
+    let hwnd = panel
+        .hwnd()
+        .map_err(|error| format!("Could not read the panel window handle: {error}"))?
+        .0 as usize;
+    let node_bridge = app.state::<NodeBridge>();
+    let mut runtime = node_bridge
+        .0
+        .lock()
+        .map_err(|_| "Node.js sidecar lock is unavailable".to_string())?;
+    let result = request_node(
+        &mut runtime,
+        "remove-shell-panel-dock",
+        json!({ "hwnd": hwnd.to_string() }),
+    )?;
+    if result.as_bool() != Some(true) {
+        return Err("Could not release the workspace panel area".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn remove_windows_panel_dock(_app: &AppHandle, _panel: &WebviewWindow) -> Result<(), String> {
+    Ok(())
+}
+
 fn force_workspace_positions(
     app: &AppHandle,
     taskbar_height: f64,
@@ -304,7 +437,6 @@ fn force_workspace_positions(
             "Could not keep the window controls on top: {error}"
         ));
     }
-
     if errors.is_empty() {
         Ok(geometry)
     } else {
@@ -321,7 +453,51 @@ fn start_workspace_position_watchdog(app: AppHandle, taskbar_height: f64) {
             if let Err(error) = force_workspace_positions(&app, taskbar_height) {
                 eprintln!("[workspace] failed to enforce shell window placement: {error}");
             }
+            if let Some(desktop) = app.get_webview_window("desktop") {
+                if let Err(error) = set_windows_shell_layer(&app, &desktop, "desktop") {
+                    eprintln!("[workspace] failed to keep the desktop behind Explorer: {error}");
+                }
+            }
+            if let Some(controls) = app.get_webview_window("controls") {
+                if let Err(error) = set_windows_shell_layer(&app, &controls, "top") {
+                    eprintln!("[workspace] failed to keep the window controls on top: {error}");
+                }
+            }
             thread::sleep(Duration::from_secs(1));
+        }
+    });
+}
+
+fn start_native_workspace_window_setup(app: AppHandle) {
+    thread::spawn(move || {
+        let result = (|| {
+            let desktop = app
+                .get_webview_window("desktop")
+                .ok_or_else(|| "The desktop window was not created".to_string())?;
+            let panel = app
+                .get_webview_window("panel")
+                .ok_or_else(|| "The workspace panel was not created".to_string())?;
+            let controls = app
+                .get_webview_window("controls")
+                .ok_or_else(|| "The window controls were not created".to_string())?;
+
+            set_windows_shell_layer(&app, &desktop, "desktop")?;
+            set_windows_shell_layer(&app, &panel, "top")?;
+            set_windows_shell_layer(&app, &controls, "top")?;
+            set_windows_panel_dock(&app, &panel)
+        })();
+        if let Err(error) = result {
+            eprintln!("[workspace] failed to initialize native window layers: {error}");
+        }
+    });
+}
+
+fn schedule_desktop_bottom(app: &AppHandle, desktop: &WebviewWindow) {
+    let app = app.clone();
+    let desktop = desktop.clone();
+    thread::spawn(move || {
+        if let Err(error) = set_windows_shell_layer(&app, &desktop, "desktop") {
+            eprintln!("[workspace] failed to keep the desktop behind Explorer: {error}");
         }
     });
 }
@@ -376,7 +552,6 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
             .always_on_top(true)
             .transparent(true)
             .shadow(false)
-            .focusable(false)
             .focused(false)
             .visible(false)
             .initialization_script(initialization_script.clone())
@@ -399,7 +574,6 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
     .always_on_top(true)
     .transparent(true)
     .shadow(false)
-    .focusable(false)
     .focused(false)
     .visible(false)
     .initialization_script(initialization_script)
@@ -407,9 +581,18 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
     .map_err(|error| format!("Could not create the window controls: {error}"))?;
 
     let app_handle = app.handle().clone();
-    close_workspace_on_window_close(&desktop, app_handle.clone());
-    close_workspace_on_window_close(&panel, app_handle.clone());
-    close_workspace_on_window_close(&controls, app_handle);
+    let close_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    close_workspace_on_window_close(&desktop, app_handle.clone(), &panel, close_started.clone());
+    close_workspace_on_window_close(&panel, app_handle.clone(), &panel, close_started.clone());
+    close_workspace_on_window_close(&controls, app_handle, &panel, close_started);
+
+    let app_for_focus = app.handle().clone();
+    let desktop_for_focus = desktop.clone();
+    desktop.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Focused(true)) {
+            schedule_desktop_bottom(&app_for_focus, &desktop_for_focus);
+        }
+    });
 
     desktop
         .show()
@@ -670,6 +853,7 @@ fn build_overview_window(app: &AppHandle, geometry: WorkspaceGeometry) -> Result
     overview
         .set_focus()
         .map_err(|error| format!("Could not focus the workspace overview: {error}"))?;
+    set_windows_shell_layer(app, &overview, "top")?;
     Ok(())
 }
 
@@ -692,9 +876,10 @@ async fn open_overview(
     geometry: State<'_, WorkspaceGeometry>,
 ) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("overview") {
-        return window
+        window
             .set_focus()
-            .map_err(|error| format!("Could not focus the workspace overview: {error}"));
+            .map_err(|error| format!("Could not focus the workspace overview: {error}"))?;
+        return set_windows_shell_layer(&app, &window, "top");
     }
     build_overview_window(&app, *geometry)
 }
@@ -770,14 +955,14 @@ async fn open_window_settings(app: AppHandle, label: String) -> Result<(), Strin
             .show()
             .and_then(|_| settings.set_focus())
             .map_err(|error| format!("Could not open window settings: {error}"))?;
-        return Ok(());
+        return set_windows_shell_layer(&app, &settings, "top");
     }
 
     let script_value = serde_json::to_string(&label)
         .map_err(|error| format!("Could not encode target window label: {error}"))?;
     let theme_settings = current_theme_settings(&app)?;
     let initialization_script = window_chrome_initialization_script(&theme_settings)?;
-    WebviewWindowBuilder::new(
+    let settings = WebviewWindowBuilder::new(
         &app,
         "window-settings",
         WebviewUrl::App(PathBuf::from("window-settings.html")),
@@ -797,7 +982,7 @@ async fn open_window_settings(app: AppHandle, label: String) -> Result<(), Strin
     ))
     .build()
     .map_err(|error| format!("Could not create window settings: {error}"))?;
-    Ok(())
+    set_windows_shell_layer(&app, &settings, "top")
 }
 
 #[tauri::command]
@@ -1013,7 +1198,7 @@ async fn open_program(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let runtime = start_node_bridge().map_err(std::io::Error::other)?;
@@ -1029,7 +1214,6 @@ pub fn run() {
             app.manage(ThemeSettingsState(Mutex::new(theme_settings)));
             let geometry = configure_workspace_windows(app).map_err(std::io::Error::other)?;
             app.manage(geometry);
-            start_workspace_position_watchdog(app.handle().clone(), geometry.taskbar_height);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1049,8 +1233,16 @@ pub fn run() {
             reload_program_window,
             open_program_devtools
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app, event| {
+        if matches!(event, RunEvent::Ready) {
+            let geometry = *app.state::<WorkspaceGeometry>();
+            start_native_workspace_window_setup(app.clone());
+            start_workspace_position_watchdog(app.clone(), geometry.taskbar_height);
+        }
+    });
 }
 
 #[tauri::command]

@@ -432,6 +432,58 @@ async function getExplorerShellStatus(context) {
   return nativeHost.request('explorer-shell-status');
 }
 
+async function setShellWindowLayer(payload, context) {
+  const hwnd = payload?.hwnd;
+  const layer = payload?.layer;
+  if (typeof hwnd !== 'string' || !/^[1-9]\d*$/.test(hwnd)) {
+    throw new Error('A valid shell window handle is required');
+  }
+  if (layer !== 'desktop' && layer !== 'top') {
+    throw new Error('Unsupported shell window layer');
+  }
+
+  const nativeHost = getWindowsNativeHost(context);
+  const action = layer === 'desktop' ? 'desktop-bottom' : 'z-order';
+  const result = await nativeHost.request(action, {
+    hwnd,
+    ...(layer === 'top' ? { layer } : {}),
+  });
+  if (result !== true) throw new Error(`Could not place shell window in the ${layer} layer`);
+  return true;
+}
+
+async function setShellPanelDock(payload, context) {
+  const { hwnd, x, y, width, height } = payload ?? {};
+  if (typeof hwnd !== 'string' || !/^[1-9]\d*$/.test(hwnd)) {
+    throw new Error('A valid shell panel handle is required');
+  }
+  if (![x, y, width, height].every(Number.isSafeInteger)
+    || width <= 0 || height <= 0) {
+    throw new Error('Valid shell panel bounds are required');
+  }
+
+  const result = await getWindowsNativeHost(context).request('dock', {
+    hwnd,
+    x,
+    y,
+    width,
+    height,
+    edge: 'top',
+  });
+  if (result !== true) throw new Error('Could not reserve the shell panel work area');
+  return true;
+}
+
+async function removeShellPanelDock(payload, context) {
+  const hwnd = payload?.hwnd;
+  if (typeof hwnd !== 'string' || !/^[1-9]\d*$/.test(hwnd)) {
+    throw new Error('A valid shell panel handle is required');
+  }
+  const result = await getWindowsNativeHost(context).request('dock-remove', { hwnd });
+  if (result !== true) throw new Error('Could not release the shell panel work area');
+  return true;
+}
+
 export async function readDesktopDirectory(payload) {
   try {
     const listing = await listDirectory({ path: payload?.path });
@@ -1011,6 +1063,15 @@ export async function handleRequest(request, context) {
   }
   if (request?.method === 'explorer-shell-status') {
     return getExplorerShellStatus(context);
+  }
+  if (request?.method === 'set-shell-window-layer') {
+    return setShellWindowLayer(request.payload, context);
+  }
+  if (request?.method === 'set-shell-panel-dock') {
+    return setShellPanelDock(request.payload, context);
+  }
+  if (request?.method === 'remove-shell-panel-dock') {
+    return removeShellPanelDock(request.payload, context);
   }
   if (request?.method === 'open-everything') {
     if ((typeof context === 'string' ? process.platform : context.platform) !== 'win32') {

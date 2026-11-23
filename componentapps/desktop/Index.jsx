@@ -3,7 +3,6 @@ import { createRoot } from 'react-dom/client';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import FileView from './components/FileView';
-import FrameHandler from './components/FrameHandler';
 import BackgroundRenderer from './components/BackgroundRenderer';
 import ThemeApplier from './components/ThemeApplier';
 import useViewStateBridge from './hooks/useViewStateBridge';
@@ -30,9 +29,8 @@ const darkTheme = createTheme({
 document.addEventListener('DOMContentLoaded', () => {
   const bgEl      = document.getElementById('background-root');
   const desktopEl = document.getElementById('desktop-root');
-  const frameEl   = document.getElementById('frame-root');
 
-  if (!bgEl || !desktopEl || !frameEl) {
+  if (!bgEl || !desktopEl) {
     console.error('Не найдены контейнеры');
     return;
   }
@@ -55,14 +53,6 @@ document.addEventListener('DOMContentLoaded', () => {
       <ThemeProvider theme={darkTheme}>
         <CssBaseline />
         <FileView />
-      </ThemeProvider>
-    </React.StrictMode>
-  );
-
-  createRoot(frameEl).render(
-    <React.StrictMode>
-      <ThemeProvider theme={darkTheme}>
-        <FrameHandler />
       </ThemeProvider>
     </React.StrictMode>
   );

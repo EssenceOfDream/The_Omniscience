@@ -21,6 +21,7 @@ import {
   type ProgramWindow,
 } from './tauri';
 import { installTopbarBridge } from './topbar-bridge';
+import './App.css';
 
 const theme = createTheme({
   palette: {

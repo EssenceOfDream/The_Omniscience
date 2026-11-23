@@ -33,6 +33,69 @@ test('resolves bundled public assets for Tauri without changing legacy file URLs
   }
 });
 
+test('places shell windows at the desktop bottom and topmost through the native host', async () => {
+  const requests = [];
+  const context = {
+    platform: 'win32',
+    nativeWindowHost: {
+      request: async (action, payload) => {
+        requests.push({ action, payload });
+        return true;
+      },
+    },
+  };
+
+  assert.equal(await handleRequest({
+    method: 'set-shell-window-layer',
+    payload: { hwnd: '1234', layer: 'desktop' },
+  }, context), true);
+  assert.equal(await handleRequest({
+    method: 'set-shell-window-layer',
+    payload: { hwnd: '5678', layer: 'top' },
+  }, context), true);
+  assert.deepEqual(requests, [
+    { action: 'desktop-bottom', payload: { hwnd: '1234' } },
+    { action: 'z-order', payload: { hwnd: '5678', layer: 'top' } },
+  ]);
+  await assert.rejects(handleRequest({
+    method: 'set-shell-window-layer',
+    payload: { hwnd: '0', layer: 'top' },
+  }, context), /valid shell window handle/);
+});
+
+test('reserves and releases the workspace panel work area', async () => {
+  const requests = [];
+  const context = {
+    platform: 'win32',
+    nativeWindowHost: {
+      request: async (action, payload) => {
+        requests.push({ action, payload });
+        return true;
+      },
+    },
+  };
+
+  assert.equal(await handleRequest({
+    method: 'set-shell-panel-dock',
+    payload: { hwnd: '1234', x: 120, y: 48, width: 1400, height: 28 },
+  }, context), true);
+  assert.equal(await handleRequest({
+    method: 'remove-shell-panel-dock',
+    payload: { hwnd: '1234' },
+  }, context), true);
+  assert.deepEqual(requests, [
+    {
+      action: 'dock',
+      payload: { hwnd: '1234', x: 120, y: 48, width: 1400, height: 28, edge: 'top' },
+    },
+    { action: 'dock-remove', payload: { hwnd: '1234' } },
+  ]);
+  await assert.rejects(handleRequest({
+    method: 'set-shell-panel-dock',
+    payload: { hwnd: '1234', x: 0, y: 0, width: 0, height: 28 },
+  }, context), /Valid shell panel bounds/);
+});
+
 test('lists project programs and marks only apps with an HTML entry point', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'omni-tauri-'));
   try {
