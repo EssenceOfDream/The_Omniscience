@@ -72,7 +72,10 @@ export default function BackgroundRenderer() {
   const projectRoot = useProjectRoot();
   const { type, source, color, opacity, componentName } = bg;
 
-  const src = projectRoot == null ? null : resolveForDisplay(source, projectRoot);
+  const isBundledAsset = window.__TAURI__ && typeof source === 'string' && source.startsWith('public/');
+  const src = projectRoot == null && !isBundledAsset
+    ? null
+    : resolveForDisplay(source, projectRoot);
 
   // Заглушка — сплошной цвет.
   const fallback = () => (

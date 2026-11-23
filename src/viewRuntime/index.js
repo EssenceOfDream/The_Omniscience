@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { settingsStore } from '../settings/store';
 
 // Кэш значений по path
 const cache = new Map();
@@ -30,9 +31,26 @@ function ensureBootstrap() {
  * @returns {*} текущее значение (или undefined, пока не пришло)
  */
 export function useViewSetting(path) {
-	const [value, setValue] = useState(() => cache.get(path));
+	const isTauriSetting = path.startsWith('settings.') && Boolean(window.__TAURI__);
+	const settingsPath = path.slice('settings.'.length);
+	const [value, setValue] = useState(() => (
+		isTauriSetting
+			? settingsPath.split('.').reduce((state, key) => (state == null ? state : state[key]), settingsStore.getState())
+			: cache.get(path)
+	));
 
 	useEffect(() => {
+		if (isTauriSetting) {
+			const update = () => {
+				const next = settingsPath
+					.split('.')
+					.reduce((state, key) => (state == null ? state : state[key]), settingsStore.getState());
+				setValue(next);
+			};
+			update();
+			return settingsStore.subscribe(update);
+		}
+
 		ensureBootstrap();
 
 		let fns = listeners.get(path);
@@ -52,7 +70,7 @@ export function useViewSetting(path) {
 				window.electron_view_API?.unsubscribe([path]);
 			}
 		};
-	}, [path]);
+	}, [isTauriSetting, path, settingsPath]);
 
 	return value;
 }
@@ -63,6 +81,10 @@ export function useViewSetting(path) {
  * @param {object} payload
  */
 export function viewDispatch(type, payload) {
+	if (window.__TAURI__ && type === 'updateSetting' && typeof payload?.path === 'string') {
+		settingsStore.update(payload.path, payload.value);
+		return;
+	}
 	window.electron_view_API?.dispatch(type, payload);
 }
 

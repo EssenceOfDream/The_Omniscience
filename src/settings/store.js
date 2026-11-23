@@ -1,4 +1,7 @@
+import { emit as emitTauri, listen as listenTauri } from '@tauri-apps/api/event';
+
 const STORAGE_KEY = 'theOmniscienceSettings';
+const PREVIOUS_DEFAULT_BACKGROUND = 'public/images/background.jpg';
 
 const defaultSettings = {
   themeEnabled: true,
@@ -31,18 +34,61 @@ const defaultSettings = {
   },
 };
 
+function mergeSettings(saved = {}) {
+  return {
+    ...defaultSettings,
+    ...saved,
+    themeColors: { ...defaultSettings.themeColors, ...saved.themeColors },
+    background: { ...defaultSettings.background, ...saved.background },
+    desktopFiles: { ...defaultSettings.desktopFiles, ...saved.desktopFiles },
+  };
+}
+
 function loadSettings() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return { ...defaultSettings, ...JSON.parse(saved) };
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      const settings = mergeSettings(parsed);
+      if (parsed.background?.source === PREVIOUS_DEFAULT_BACKGROUND) {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+        } catch (error) {
+          console.error('[settings] background migration save failed', error);
+        }
+      }
+      return settings;
+    }
   } catch (e) {
     console.error('[settings] load failed', e);
   }
-  return defaultSettings;
+  return mergeSettings();
 }
 
 let currentSettings = loadSettings();
 const listeners = new Set();
+
+function broadcastSettings() {
+  if (typeof window === 'undefined' || !window.__TAURI__) return;
+  emitTauri('omniscience-settings-updated', currentSettings)
+    .catch((error) => console.error('[settings] Tauri broadcast failed', error));
+}
+
+if (typeof window !== 'undefined' && window.__TAURI__) {
+  listenTauri('omniscience-settings-updated', ({ payload }) => {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      console.error('[settings] received invalid settings from another window');
+      return;
+    }
+    currentSettings = mergeSettings(payload);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(currentSettings));
+    } catch (error) {
+      console.error('[settings] could not save settings received from another window', error);
+    }
+    emit();
+  }).catch((error) => console.error('[settings] Tauri listener failed', error));
+}
 
 function emit() {
   for (const fn of listeners) fn();
@@ -72,11 +118,17 @@ export const settingsStore = {
       console.error('[settings] save failed', e);
     }
     emit();
+    broadcastSettings();
   },
 
   reset() {
-    currentSettings = defaultSettings;
-    try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+    currentSettings = mergeSettings();
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch (error) {
+      console.error('[settings] reset failed', error);
+    }
     emit();
+    broadcastSettings();
   },
 };

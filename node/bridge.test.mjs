@@ -11,6 +11,27 @@ import {
   startFileServer,
 } from './bridge.mjs';
 import buildComponentApps from '../main/vite_build.js';
+import { resolveForDisplay } from '../src/viewRuntime/paths.js';
+
+test('resolves bundled public assets for Tauri without changing legacy file URLs', () => {
+  const previousWindow = globalThis.window;
+  try {
+    globalThis.window = { __TAURI__: {} };
+    assert.equal(
+      resolveForDisplay('public/images/background.jpg', 'C:\\Omni'),
+      '/images/background.jpg',
+    );
+
+    globalThis.window = {};
+    assert.equal(
+      resolveForDisplay('public/images/background.jpg', 'C:\\Omni'),
+      'file:///C:/Omni/public/images/background.jpg',
+    );
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
+});
 
 test('lists project programs and marks only apps with an HTML entry point', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'omni-tauri-'));

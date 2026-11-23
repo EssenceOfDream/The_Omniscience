@@ -68,6 +68,9 @@ export function resolveLocalPath(path, projectRoot) {
 export function resolveForDisplay(path, projectRoot) {
 	if (!path) return path;
 	if (isExternalUrl(path)) return path;
+	if (window.__TAURI__ && String(path).startsWith('public/')) {
+		return `/${String(path).slice('public/'.length)}`;
+	}
 	if (!isAbsolutePath(path)) {
 		path = resolveLocalPath(path, projectRoot) || path;
 	}
