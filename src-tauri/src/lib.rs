@@ -19,6 +19,8 @@ static PROGRAM_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 const WINDOW_CONTROLS_WIDTH: f64 = 104.0;
 const WINDOW_CONTROLS_HEIGHT: f64 = 62.0;
 const WINDOW_CONTROLS_BOTTOM_PADDING: f64 = 0.0;
+const THEME_BASE_CSS: &str = include_str!("../../extensions/omni-theme/base.css");
+const THEME_CONTENT_JS: &str = include_str!("../../extensions/omni-theme/content.js");
 
 mod componentapp_backends {
     include!(concat!(env!("OUT_DIR"), "/componentapp_backends.rs"));
@@ -61,6 +63,8 @@ impl Drop for NodeRuntime {
 }
 
 struct NodeBridge(Arc<Mutex<NodeRuntime>>);
+
+struct ThemeSettingsState(Mutex<Value>);
 
 #[derive(Clone, Copy)]
 struct WindowBounds {
@@ -124,8 +128,43 @@ fn close_workspace_on_window_close(window: &WebviewWindow, app: AppHandle) {
     });
 }
 
-fn window_chrome_initialization_script() -> &'static str {
-    r#"(()=>{let b=document.getElementById('__omni_window_border__');if(!b){b=document.createElement('div');b.id='__omni_window_border__';b.setAttribute('aria-hidden','true');document.documentElement.appendChild(b);}Object.assign(b.style,{position:'fixed',inset:'0',border:'1px dashed #00ffff',boxSizing:'border-box',pointerEvents:'none',zIndex:'2147483647'});})();"#
+fn current_theme_settings(app: &AppHandle) -> Result<Value, String> {
+    app.state::<ThemeSettingsState>()
+        .0
+        .lock()
+        .map(|settings| settings.clone())
+        .map_err(|_| "Omni Theme settings lock is unavailable".to_string())
+}
+
+fn window_chrome_initialization_script(theme_settings: &Value) -> Result<String, String> {
+    let settings = serde_json::to_string(theme_settings)
+        .map_err(|error| format!("Could not encode Omni Theme settings: {error}"))?;
+    let base_css = serde_json::to_string(THEME_BASE_CSS)
+        .map_err(|error| format!("Could not encode Omni Theme stylesheet: {error}"))?;
+
+    let mut script = String::from("(()=>{const settings=");
+    script.push_str(&settings);
+    script.push_str(
+        ";try{localStorage.setItem('__omni_settings__',JSON.stringify(settings));}catch(_){}\
+         const install=()=>{const root=document.documentElement;if(!root)return false;\
+         if(!document.getElementById('__omni_theme_base__')){const style=document.createElement('style');\
+         style.id='__omni_theme_base__';style.dataset.omniTheme='true';style.textContent=",
+    );
+    script.push_str(&base_css);
+    script.push_str(
+        ";(document.head||root).appendChild(style);}\
+         if(!document.getElementById('__omni_window_border__')){const border=document.createElement('div');\
+         border.id='__omni_window_border__';border.setAttribute('aria-hidden','true');\
+         Object.assign(border.style,{position:'fixed',inset:'0',border:'1px dashed #00ffff',\
+         boxSizing:'border-box',pointerEvents:'none',zIndex:'2147483647'});root.appendChild(border);}\
+         return true;};if(!install()){const observer=new MutationObserver(()=>{if(install())observer.disconnect();});\
+         observer.observe(document,{childList:true,subtree:true});}",
+    );
+    script.push_str(THEME_CONTENT_JS);
+    script.push_str(
+        ";window.dispatchEvent(new CustomEvent('__omni_settings_updated__',{detail:settings}));})();",
+    );
+    Ok(script)
 }
 
 fn get_primary_screen_bounds(window: &WebviewWindow) -> Result<(WindowBounds, f64), String> {
@@ -292,7 +331,11 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
         .get_webview_window("desktop")
         .ok_or_else(|| "The desktop window was not created".to_string())?;
     let (screen, scale_factor) = get_primary_screen_bounds(&desktop)?;
-    let _ = desktop.eval(window_chrome_initialization_script());
+    let theme_settings = current_theme_settings(app.handle())?;
+    let initialization_script = window_chrome_initialization_script(&theme_settings)?;
+    desktop
+        .eval(&initialization_script)
+        .map_err(|error| format!("Could not apply Omni Theme to the desktop: {error}"))?;
 
     let node_bridge = app.state::<NodeBridge>();
     let mut runtime = node_bridge
@@ -336,7 +379,7 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
             .focusable(false)
             .focused(false)
             .visible(false)
-            .initialization_script(window_chrome_initialization_script())
+            .initialization_script(initialization_script.clone())
             .build()
             .map_err(|error| format!("Could not create the workspace panel: {error}"))?;
 
@@ -359,7 +402,7 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
     .focusable(false)
     .focused(false)
     .visible(false)
-    .initialization_script(window_chrome_initialization_script())
+    .initialization_script(initialization_script)
     .build()
     .map_err(|error| format!("Could not create the window controls: {error}"))?;
 
@@ -439,8 +482,7 @@ fn component_app_init_script(
         .map_err(|error| format!("Could not encode componentapp id: {error}"))?;
     let params = serde_json::to_string(params)
         .map_err(|error| format!("Could not encode componentapp parameters: {error}"))?;
-    let theme_settings = serde_json::to_string(theme_settings)
-        .map_err(|error| format!("Could not encode componentapp theme settings: {error}"))?;
+    let theme_script = window_chrome_initialization_script(theme_settings)?;
     let platform = if cfg!(target_os = "windows") {
         "win32"
     } else if cfg!(target_os = "macos") {
@@ -497,37 +539,6 @@ fn component_app_init_script(
     window_close: () => window.__TAURI__.window.getCurrentWindow().close(),
   };
   __OMNI_WINDOWS_SETTINGS_API__
-  try {
-    localStorage.setItem("__omni_settings__", JSON.stringify(__OMNI_THEME_SETTINGS__));
-  } catch (error) {
-    console.error("[tauri-componentapp] could not store theme settings:", error);
-  }
-  const installTheme = () => {
-    const stylesheet = document.createElement("link");
-    stylesheet.rel = "stylesheet";
-    stylesheet.href = "/omniscience/__omniscience/theme/base.css";
-    document.head.appendChild(stylesheet);
-    const themeScript = document.createElement("script");
-    themeScript.src = "/omniscience/__omniscience/theme/content.js";
-    document.head.appendChild(themeScript);
-  };
-  const border = document.createElement("div");
-  border.id = "__omni_window_border__";
-  border.setAttribute("aria-hidden", "true");
-  Object.assign(border.style, {
-    position: "fixed",
-    inset: "0",
-    border: "1px dashed #00ffff",
-    boxSizing: "border-box",
-    pointerEvents: "none",
-    zIndex: "2147483647",
-  });
-  document.documentElement.appendChild(border);
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", installTheme, { once: true });
-  } else {
-    installTheme();
-  }
 })();
 "#;
     let windows_settings_api = if is_windows_settings {
@@ -551,12 +562,12 @@ fn component_app_init_script(
     } else {
         ""
     };
-    Ok(script
+    let component_script = script
         .replace("__OMNI_APP_ID__", &app_id)
         .replace("__OMNI_PARAMS__", &params)
-        .replace("__OMNI_THEME_SETTINGS__", &theme_settings)
         .replace("__OMNI_PLATFORM__", platform)
-        .replace("__OMNI_WINDOWS_SETTINGS_API__", windows_settings_api))
+        .replace("__OMNI_WINDOWS_SETTINGS_API__", windows_settings_api);
+    Ok(format!("{theme_script}\n{component_script}"))
 }
 
 async fn call_node(
@@ -587,28 +598,31 @@ async fn node_request(
 async fn update_theme(
     app: AppHandle,
     state: State<'_, NodeBridge>,
+    theme_state: State<'_, ThemeSettingsState>,
     settings: Value,
 ) -> Result<(), String> {
     let settings = call_node(Arc::clone(&state.0), "set-theme".to_string(), settings).await?;
-    let settings = serde_json::to_string(&settings)
+    *theme_state
+        .0
+        .lock()
+        .map_err(|_| "Omni Theme settings lock is unavailable".to_string())? = settings.clone();
+    let serialized_settings = serde_json::to_string(&settings)
         .map_err(|error| format!("Could not encode Omni Theme settings: {error}"))?;
     let script = format!(
-        "(()=>{{const settings={settings};localStorage.setItem('__omni_settings__',JSON.stringify(settings));window.dispatchEvent(new CustomEvent('__omni_settings_updated__',{{detail:settings}}));}})();"
+        "(()=>{{const settings={serialized_settings};try{{localStorage.setItem('__omni_settings__',JSON.stringify(settings));}}catch(_){{}}window.dispatchEvent(new CustomEvent('__omni_settings_updated__',{{detail:settings}}));}})();"
     );
 
+    let mut errors = Vec::new();
     for (label, window) in app.webview_windows() {
-        if label == "desktop"
-            || label == "overview"
-            || label == "panel"
-            || label == "controls"
-            || label == "window-settings"
-            || label.starts_with("program-")
-            || label.starts_with("component-")
-        {
-            window
-                .eval(&script)
-                .map_err(|error| format!("Could not update theme in {label}: {error}"))?;
+        if let Err(error) = window.eval(&script) {
+            errors.push(format!("{label}: {error}"));
         }
+    }
+    if !errors.is_empty() {
+        return Err(format!(
+            "Could not update Omni Theme in all windows: {}",
+            errors.join("; ")
+        ));
     }
     Ok(())
 }
@@ -618,6 +632,8 @@ fn build_overview_window(app: &AppHandle, geometry: WorkspaceGeometry) -> Result
         .get_webview_window("desktop")
         .ok_or_else(|| "The desktop window was not created".to_string())?;
     let (screen, _) = get_primary_screen_bounds(&desktop)?;
+    let theme_settings = current_theme_settings(app)?;
+    let initialization_script = window_chrome_initialization_script(&theme_settings)?;
     let geometry = calculate_workspace_geometry(screen, geometry.taskbar_height);
     let overview_y = geometry.panel.y + geometry.panel.height;
     let overview_height = (geometry.screen.y + geometry.screen.height - overview_y).max(1.0);
@@ -639,7 +655,7 @@ fn build_overview_window(app: &AppHandle, geometry: WorkspaceGeometry) -> Result
     .shadow(false)
     .focused(false)
     .visible(false)
-    .initialization_script(window_chrome_initialization_script())
+    .initialization_script(initialization_script)
     .build()
     .map_err(|error| format!("Could not open the workspace overview: {error}"))?;
     let app_handle = app.clone();
@@ -759,6 +775,8 @@ async fn open_window_settings(app: AppHandle, label: String) -> Result<(), Strin
 
     let script_value = serde_json::to_string(&label)
         .map_err(|error| format!("Could not encode target window label: {error}"))?;
+    let theme_settings = current_theme_settings(&app)?;
+    let initialization_script = window_chrome_initialization_script(&theme_settings)?;
     WebviewWindowBuilder::new(
         &app,
         "window-settings",
@@ -775,8 +793,7 @@ async fn open_window_settings(app: AppHandle, label: String) -> Result<(), Strin
     .shadow(false)
     .focused(true)
     .initialization_script(format!(
-        "window.__OMNI_WINDOW_SETTINGS_TARGET__ = {script_value};{}",
-        window_chrome_initialization_script()
+        "{initialization_script}window.__OMNI_WINDOW_SETTINGS_TARGET__ = {script_value};"
     ))
     .build()
     .map_err(|error| format!("Could not create window settings: {error}"))?;
@@ -968,10 +985,12 @@ async fn open_program(
             .parse()
             .map_err(|error| format!("Node.js sidecar returned an invalid URL: {error}"))?;
         let label = format!("program-{window_id}");
+        let theme_settings = current_theme_settings(&app)?;
+        let initialization_script = window_chrome_initialization_script(&theme_settings)?;
         let builder = WebviewWindowBuilder::new(&app, label.clone(), WebviewUrl::External(url))
             .title(name)
             .inner_size(1000.0, 720.0)
-            .initialization_script(window_chrome_initialization_script());
+            .initialization_script(initialization_script);
         (label, builder)
     };
 
@@ -999,6 +1018,15 @@ pub fn run() {
         .setup(|app| {
             let runtime = start_node_bridge().map_err(std::io::Error::other)?;
             app.manage(NodeBridge(Arc::new(Mutex::new(runtime))));
+            let theme_settings = {
+                let node_bridge = app.state::<NodeBridge>();
+                let mut runtime = node_bridge
+                    .0
+                    .lock()
+                    .map_err(|_| std::io::Error::other("Node.js sidecar lock is unavailable"))?;
+                request_node(&mut runtime, "get-theme", json!({})).map_err(std::io::Error::other)?
+            };
+            app.manage(ThemeSettingsState(Mutex::new(theme_settings)));
             let geometry = configure_workspace_windows(app).map_err(std::io::Error::other)?;
             app.manage(geometry);
             start_workspace_position_watchdog(app.handle().clone(), geometry.taskbar_height);

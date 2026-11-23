@@ -3,6 +3,12 @@ import { createRoot } from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
+declare global {
+  interface Window {
+    __omniscienceFilterInjected?: boolean;
+  }
+}
+
 export type ProgramWindow = {
   label: string;
   title: string;
@@ -55,17 +61,18 @@ export function installWindowChrome(themeSettings?: Record<string, unknown>) {
     } catch (error) {
       console.error('[tauri-theme] could not store theme settings:', error);
     }
+    window.dispatchEvent(new CustomEvent('__omni_settings_updated__', { detail: themeSettings }));
   }
 
   const installThemeAssets = () => {
-    if (!document.querySelector('link[data-omni-theme]')) {
+    if (!document.querySelector('[data-omni-theme]')) {
       const stylesheet = document.createElement('link');
       stylesheet.dataset.omniTheme = 'true';
       stylesheet.rel = 'stylesheet';
       stylesheet.href = '/omniscience/__omniscience/theme/base.css';
       document.head.appendChild(stylesheet);
     }
-    if (!document.querySelector('script[data-omni-theme]')) {
+    if (!window.__omniscienceFilterInjected && !document.querySelector('script[data-omni-theme]')) {
       const script = document.createElement('script');
       script.dataset.omniTheme = 'true';
       script.src = '/omniscience/__omniscience/theme/content.js';
