@@ -696,6 +696,42 @@ fn component_app_init_script(
       return { success: false, error: message.includes("EEXIST") ? "EEXIST" : message };
     }
   };
+  const desktopListeners = new Map();
+  const emitDesktop = (channel, payload) => {
+    for (const listener of desktopListeners.get(channel) || []) listener(payload);
+  };
+  const readDir = async (directory) => {
+    try {
+      const result = await invoke("list-directory", { path: directory });
+      return {
+        success: true,
+        files: result.entries.map((entry) => ({
+          id: entry.path,
+          name: entry.name,
+          displayName: entry.name,
+          isDir: entry.kind === "directory",
+          mediaKind: null,
+          fileUrl: null,
+          iconPath: null,
+          infoTip: null,
+          size: entry.size,
+          modifiedAt: entry.modifiedAt,
+        })),
+        directoryMetadata: null,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        success: false,
+        files: [],
+        directoryMetadata: null,
+        error: message.includes("ENOENT") || message.includes("not found")
+          ? "permission_denied"
+          : message,
+      };
+    }
+  };
+  const watchedDirectories = new Map();
   window.electron_desktop_API = {
     platform: "__OMNI_PLATFORM__",
     getProjectRoot: () => invoke("health", {}).then((result) => result.projectRoot),
@@ -703,6 +739,39 @@ fn component_app_init_script(
     getAppsList: () => invoke("get-apps-list", {}),
     closeWindow: () => window.__TAURI__.window.getCurrentWindow().close(),
     invoke: (channel, ...args) => componentInvoke(channel, ...args),
+    readDir,
+    openPath: (path) => window.__TAURI__.opener.openPath(path),
+    getFileIcon: (path) => invoke("get-file-icon", { path }),
+    watchStart: (path) => {
+      if (watchedDirectories.has(path)) return;
+      const timer = window.setInterval(async () => {
+        try {
+          await invoke("list-directory", { path });
+          emitDesktop("fs:did-change", { dir: path });
+        } catch (error) {
+          console.error("[componentapp] directory watch failed:", error);
+        }
+      }, 1500);
+      watchedDirectories.set(path, timer);
+    },
+    watchStop: (path) => {
+      const timer = watchedDirectories.get(path);
+      if (timer !== undefined) window.clearInterval(timer);
+      watchedDirectories.delete(path);
+    },
+    on: (channel, listener) => {
+      const listeners = desktopListeners.get(channel) || new Set();
+      listeners.add(listener);
+      desktopListeners.set(channel, listeners);
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0) desktopListeners.delete(channel);
+      };
+    },
+    send: (channel, payload) => {
+      if (channel === "theme:enabled-changed") return;
+      console.error(`[componentapp] unsupported desktop event: ${channel}`, payload);
+    },
     createFolder: (dir, name) => operation("create-folder", { parentPath: dir, name }),
     createFile: (dir, name) => operation("create-file", { parentPath: dir, name }),
     renamePath: (path, name) => operation("rename-path", { path, name }),
@@ -733,10 +802,7 @@ fn component_app_init_script(
   window.electron_windowsSettings_API = {
     openCategory: async (category) => {
       try {
-        return await invoke("node_request", {
-          method: "open-windows-settings-category",
-          payload: { category },
-        });
+        return await invoke("open-windows-settings-category", { category });
       } catch (error) {
         return {
           ok: false,

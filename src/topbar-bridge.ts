@@ -249,6 +249,7 @@ async function dispatch(channel: string, payload: Record<string, unknown> = {}) 
 
 export function installTopbarBridge() {
   if (window.electron_topbar_API) return;
+  platform = window.electron_desktop_API?.platform || platform;
 
   const viewApi = {
     getAppsList: () => nodeRequest('get-apps-list'),
@@ -265,6 +266,7 @@ export function installTopbarBridge() {
 
   Object.assign(window, {
     electron_desktop_API: {
+      ...window.electron_desktop_API,
       platform,
       invoke: async (channel: string, payload: Record<string, unknown> = {}) => {
         if (channel === 'get-native-apps') {

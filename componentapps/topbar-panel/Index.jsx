@@ -4,6 +4,9 @@ import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import TopBarContainer from './components/TopBarContainer';
 import ShellErrorBoundary from './components/ShellErrorBoundary';
+import { installTopbarBridge } from '../../src/topbar-bridge';
+
+installTopbarBridge();
 
 document.addEventListener('DOMContentLoaded', () => {
   const api = window.electron_topbar_API;

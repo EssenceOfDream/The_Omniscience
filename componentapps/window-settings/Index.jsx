@@ -1,6 +1,9 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
+import { installTopbarBridge } from '../../src/topbar-bridge';
+
+installTopbarBridge();
 
 // Нулевые стили по умолчанию для прозрачного окна
 document.documentElement.style.margin = '0';

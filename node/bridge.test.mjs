@@ -335,6 +335,13 @@ test('preserves the legacy Chonky and Monaco file IPC contracts', async () => {
     assert.equal(listing.success, true);
     assert.ok(listing.files.some((file) => file.id === textPath && file.isDir === false));
 
+    const monacoListing = await handleRequest({
+      method: 'componentapp-ipc',
+      payload: { appId: 'Monaco', channel: 'get-files', args: [root] },
+    }, context);
+    assert.equal(monacoListing.success, true);
+    assert.ok(monacoListing.files.some((file) => file.id === textPath && file.isDir === false));
+
     const read = await handleRequest({
       method: 'componentapp-ipc',
       payload: { appId: 'Monaco', channel: 'read-file', args: [textPath] },

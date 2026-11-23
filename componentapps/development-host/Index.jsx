@@ -3,6 +3,9 @@ import { createRoot } from 'react-dom/client';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import DevelopmentHostMenu from './App.jsx';
+import { installTopbarBridge } from '../../src/topbar-bridge';
+
+installTopbarBridge();
 
 const theme = createTheme({
   palette: {

@@ -405,6 +405,32 @@ async function getChonkyFolders(projectRoot, platform) {
   return folders;
 }
 
+async function listComponentappFiles(rawPath) {
+  const directory = absoluteDirectory({ path: rawPath });
+  try {
+    const entries = await readdir(directory, { withFileTypes: true });
+    const files = await Promise.all(entries.map(async (entry) => {
+      const entryPath = path.join(directory, entry.name);
+      const info = await stat(entryPath);
+      return {
+        id: entryPath,
+        name: entry.name,
+        isDir: info.isDirectory(),
+        size: info.size,
+        modDate: info.mtime.toISOString(),
+      };
+    }));
+    return { success: true, files };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.code === 'EACCES' || error.code === 'EPERM'
+        ? 'permission_denied'
+        : 'unknown',
+    };
+  }
+}
+
 async function invokeComponentappIpc(payload, context) {
   const appId = payload?.appId;
   const channel = payload?.channel;
@@ -422,33 +448,14 @@ async function invokeComponentappIpc(payload, context) {
       );
     }
     if (channel === 'get-files') {
-      const directory = absoluteDirectory({ path: args[0] });
-      try {
-        const entries = await readdir(directory, { withFileTypes: true });
-        const files = await Promise.all(entries.map(async (entry) => {
-          const entryPath = path.join(directory, entry.name);
-          const info = await stat(entryPath);
-          return {
-            id: entryPath,
-            name: entry.name,
-            isDir: info.isDirectory(),
-            size: info.size,
-            modDate: info.mtime.toISOString(),
-          };
-        }));
-        return { success: true, files };
-      } catch (error) {
-        return {
-          success: false,
-          error: error.code === 'EACCES' || error.code === 'EPERM'
-            ? 'permission_denied'
-            : 'unknown',
-        };
-      }
+      return listComponentappFiles(args[0]);
     }
   }
 
   if (appId === 'Monaco') {
+    if (channel === 'get-files') {
+      return listComponentappFiles(args[0]);
+    }
     if (channel === 'read-file') {
       const filePath = absoluteComponentappPath(args[0]);
       try {
