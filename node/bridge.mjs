@@ -859,13 +859,21 @@ async function listNativeApps(context = {}) {
     '-Action',
     'List',
   ], { windowsHide: true, timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
-  for (const app of parseWindowsUwpApps(stdout)) {
+  const uwpApps = parseWindowsUwpApps(stdout);
+  const uwpIcons = await getWindowsIcons(uwpApps
+    .filter((app) => app.iconPath)
+    .map((app) => ({
+      id: `uwp:${app.appUserModelId.toLowerCase()}`,
+      path: app.iconPath,
+    })), context);
+  for (const app of uwpApps) {
+    const id = `native:uwp:${app.appUserModelId.toLowerCase()}`;
     apps.push({
-      id: `native:uwp:${app.appUserModelId.toLowerCase()}`,
+      id,
       name: app.title,
       launchType: 'uwp',
       launchTarget: app.appUserModelId,
-      icon: null,
+      icon: uwpIcons.get(`uwp:${app.appUserModelId.toLowerCase()}`) || null,
     });
   }
 

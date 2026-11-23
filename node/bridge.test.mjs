@@ -439,6 +439,7 @@ test('lists Windows Start Menu shortcuts and packaged apps for the shell menu', 
             {
               Name: 'Календарь',
               AppID: 'Microsoft.WindowsCalendar_8wekyb3d8bbwe!App',
+              IconPath: 'C:\\Packages\\Calendar\\Assets\\Square44x44Logo.png',
             },
             { Name: 'Invalid app id', AppID: 'not-an-app-id' },
           ]),
@@ -458,6 +459,10 @@ test('lists Windows Start Menu shortcuts and packaged apps for the shell menu', 
     assert.equal(
       apps.find(({ name }) => name === 'Editor').icon,
       `data:image/png;base64,${Buffer.from('Editor.lnk').toString('base64')}`,
+    );
+    assert.equal(
+      apps.find(({ name }) => name === 'Календарь').icon,
+      `data:image/png;base64,${Buffer.from('Square44x44Logo.png').toString('base64')}`,
     );
     assert.equal(calls.length, 1);
     assert.ok(calls[0].args.includes('-Action'));

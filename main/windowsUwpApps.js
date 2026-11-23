@@ -23,6 +23,9 @@ export function parseWindowsUwpApps(output) {
         ? entry.Name.trim()
         : appUserModelId,
       appUserModelId,
+      iconPath: typeof entry.IconPath === 'string' && entry.IconPath.trim()
+        ? entry.IconPath.trim()
+        : null,
     });
   }
 
