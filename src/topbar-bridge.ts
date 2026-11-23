@@ -181,7 +181,7 @@ async function dispatch(channel: string, payload: Record<string, unknown> = {}) 
           return { ok: true };
         }
       }
-      if (url) throw new Error('The browser card did not provide a launchable app id');
+      if (url) throw new Error('A URL-only window cannot be opened without a webapp id');
       return { ok: true };
     }
 
@@ -200,11 +200,19 @@ async function dispatch(channel: string, payload: Record<string, unknown> = {}) 
     const action = channel.slice('native-window:'.length);
     if (action === 'prepare-drag') {
       const id = getWindowLabel(payload);
-      const appWindows = await invoke<ProgramWindow[]>('list_program_windows');
-      const target = appWindows.find((item) => item.label === id);
-      return target
-        ? { ok: true, bounds: { x: target.x, y: target.y, width: target.width, height: target.height } }
-        : { ok: false, abort: true };
+      if (!id) throw new Error('A window id is required');
+      if (payload.kind === 'native') {
+        return nodeRequest('prepare-native-window-drag', {
+          id,
+          mode: payload.mode,
+          direction: payload.direction,
+        });
+      }
+      return invoke('prepare_program_window_drag', {
+        label: id,
+        mode: payload.mode,
+        direction: payload.direction ?? null,
+      });
     }
     if (action === 'drag-end') return { ok: true };
     if (action === 'set-bounds') {

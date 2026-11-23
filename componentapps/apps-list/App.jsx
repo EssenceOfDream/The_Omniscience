@@ -44,7 +44,6 @@ const PAGE_SIZE = 60;
 /* ------------------------------------------------------------------ */
 
 function inferKind(app) {
-  if (app.type === 'browser') return 'webapp';
   if (app.type) return app.type;
   return 'componentapp';
 }

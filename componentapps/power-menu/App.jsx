@@ -7,6 +7,7 @@ import BedtimeIcon from '@mui/icons-material/Bedtime';
 import LogoutIcon from '@mui/icons-material/Logout';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 const actions = [
   { id: 'logout', label: 'Выйти из аккаунта', Icon: LogoutIcon },
@@ -23,13 +24,23 @@ export default function PowerMenu() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  const close = () => getApi()?.send?.('power-menu:close');
+  const close = async () => {
+    if (!window.__TAURI__) {
+      getApi()?.send?.('power-menu:close');
+      return;
+    }
+    try {
+      await getCurrentWindow().close();
+    } catch (closeError) {
+      setError(`Не удалось закрыть меню: ${closeError.message || String(closeError)}`);
+    }
+  };
 
   useEffect(() => {
     const onKeyDown = (event) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        close();
+        void close();
       }
     };
     document.addEventListener('keydown', onKeyDown);

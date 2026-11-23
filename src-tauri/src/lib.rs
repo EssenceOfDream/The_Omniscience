@@ -992,6 +992,18 @@ async fn node_request(
 }
 
 #[tauri::command]
+fn trash_path(path: String) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    if !path.is_absolute() || path.file_name().is_none() {
+        return Err("A valid absolute file or directory path is required".to_string());
+    }
+
+    trash::delete(&path).map_err(|error| {
+        format!("Could not move {} to the system trash: {error}", path.display())
+    })
+}
+
+#[tauri::command]
 async fn update_theme(
     app: AppHandle,
     state: State<'_, NodeBridge>,
@@ -1166,6 +1178,82 @@ fn get_program_window(app: &AppHandle, label: &str) -> Result<WebviewWindow, Str
     }
     app.get_webview_window(label)
         .ok_or_else(|| format!("Program window {label} is no longer open"))
+}
+
+#[tauri::command]
+async fn prepare_program_window_drag(
+    app: AppHandle,
+    state: State<'_, NodeBridge>,
+    label: String,
+    mode: String,
+    direction: Option<String>,
+) -> Result<Value, String> {
+    let window = get_program_window(&app, &label)?;
+    window
+        .set_focus()
+        .map_err(|error| format!("Could not focus {label} before dragging: {error}"))?;
+    let position = window
+        .outer_position()
+        .map_err(|error| format!("Could not read window position: {error}"))?;
+    let size = window
+        .outer_size()
+        .map_err(|error| format!("Could not read window size: {error}"))?;
+    let width = i32::try_from(size.width)
+        .map_err(|_| "Window width is outside the supported range".to_string())?;
+    let height = i32::try_from(size.height)
+        .map_err(|_| "Window height is outside the supported range".to_string())?;
+    if width <= 0 || height <= 0 {
+        return Err("Window has invalid bounds".to_string());
+    }
+
+    let right = position.x + width - 1;
+    let bottom = position.y + height - 1;
+    let center_x = position.x + width / 2;
+    let center_y = position.y + height / 2;
+    let cursor = match (mode.as_str(), direction.as_deref()) {
+        ("move", _) => (center_x, position.y + 20.min((height / 3).max(1))),
+        ("resize", Some("nw")) => (position.x, position.y),
+        ("resize", Some("n")) => (center_x, position.y),
+        ("resize", Some("ne")) => (right, position.y),
+        ("resize", Some("e")) => (right, center_y),
+        ("resize", Some("se")) => (right, bottom),
+        ("resize", Some("s")) => (center_x, bottom),
+        ("resize", Some("sw")) => (position.x, bottom),
+        ("resize", Some("w")) => (position.x, center_y),
+        _ => return Err("Invalid window drag mode or resize direction".to_string()),
+    };
+    let scale_factor = window
+        .scale_factor()
+        .map_err(|error| format!("Could not read window scale: {error}"))?;
+    let logical_position = position.to_logical::<f64>(scale_factor);
+    let logical_size = size.to_logical::<f64>(scale_factor);
+    let mut response = json!({
+        "ok": true,
+        "bounds": {
+            "x": logical_position.x,
+            "y": logical_position.y,
+            "width": logical_size.width,
+            "height": logical_size.height
+        }
+    });
+
+    if cfg!(target_os = "windows") {
+        let result = call_node(
+            Arc::clone(&state.0),
+            "set-cursor-position".to_string(),
+            json!({ "x": cursor.0, "y": cursor.1 }),
+        )
+        .await?;
+        if result.get("ok").and_then(Value::as_bool) != Some(true) {
+            return Err("Could not move the cursor to the window".to_string());
+        }
+        response["cursor"] = json!({
+            "x": cursor.0 as f64 / scale_factor,
+            "y": cursor.1 as f64 / scale_factor
+        });
+    }
+
+    Ok(response)
 }
 
 #[tauri::command]
@@ -1382,6 +1470,10 @@ async fn open_program(
             )
         } else if name == "windows-settings" {
             (1120.0, 800.0)
+        } else if name == "settings" {
+            (800.0, 640.0)
+        } else if name == "open-windows" {
+            (1000.0, 720.0)
         } else {
             (400.0, 190.0)
         };
@@ -1423,6 +1515,8 @@ async fn open_program(
         let builder = WebviewWindowBuilder::new(&app, label.clone(), WebviewUrl::External(url))
             .title(name)
             .inner_size(1000.0, 720.0)
+            .decorations(false)
+            .transparent(true)
             .initialization_script(initialization_script);
         (label, builder)
     };
@@ -1483,6 +1577,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             node_request,
+            trash_path,
             componentapp_request,
             toggle_overview,
             open_overview,
@@ -1492,6 +1587,7 @@ pub fn run() {
             list_program_windows,
             manage_program_window,
             set_program_window_bounds,
+            prepare_program_window_drag,
             open_window_settings,
             get_program_window_settings,
             set_program_window_layer,

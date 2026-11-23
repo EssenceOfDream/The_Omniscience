@@ -38,6 +38,7 @@ declare global {
       createFolder: (directory: string, name: string) => Promise<unknown>;
       createFile: (directory: string, name: string) => Promise<unknown>;
       renamePath: (path: string, name: string) => Promise<unknown>;
+      trashPath: (path: string) => Promise<void>;
       on: (channel: string, listener: (...args: unknown[]) => void) => () => void;
       send: (channel: string, payload?: unknown) => void;
       invoke: (channel: string, payload?: unknown) => Promise<unknown>;
@@ -122,6 +123,7 @@ export function installDesktopBridge() {
       nodeRequest('create-file', { parentPath: directory, name }),
     renamePath: (path: string, name: string) =>
       nodeRequest('rename-path', { path, name }),
+    trashPath: (path: string) => invoke<void>('trash_path', { path }),
     on,
     send: (channel: string, payload?: unknown) => {
       if (channel === 'theme:enabled-changed') {

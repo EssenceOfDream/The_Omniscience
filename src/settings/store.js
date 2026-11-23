@@ -2,6 +2,38 @@ import { emit as emitTauri, listen as listenTauri } from '@tauri-apps/api/event'
 
 const STORAGE_KEY = 'theOmniscienceSettings';
 const PREVIOUS_DEFAULT_BACKGROUND = 'public/images/background.jpg';
+const defaultOverviewTabs = [
+  { id: 'apps-list', visible: true },
+  { id: 'open-windows', visible: true },
+  { id: 'settings', visible: true, locked: true },
+];
+
+function normalizeOverviewTabs(value) {
+  const tabsById = new Map(defaultOverviewTabs.map((tab) => [tab.id, tab]));
+  const result = [];
+  const seen = new Set();
+
+  for (const savedTab of Array.isArray(value) ? value : []) {
+    if (!savedTab || typeof savedTab.id !== 'string') continue;
+    const id = savedTab.id === 'web-search' ? 'open-windows' : savedTab.id;
+    const definition = tabsById.get(id);
+    if (!definition || seen.has(id)) continue;
+    seen.add(id);
+    result.push({
+      ...definition,
+      visible: definition.locked
+        ? true
+        : typeof savedTab.visible === 'boolean' ? savedTab.visible : definition.visible,
+    });
+  }
+
+  for (const tab of defaultOverviewTabs) {
+    if (seen.has(tab.id)) continue;
+    result.push({ ...tab });
+  }
+
+  return result;
+}
 
 const defaultSettings = {
   themeEnabled: true,
@@ -23,11 +55,7 @@ const defaultSettings = {
   customAnimations: null,
   // Список вкладок Overview. Порядок = порядок в массиве.
   // settings — locked, его нельзя скрыть или удалить.
-  overviewTabs: [
-    { id: 'apps-list', visible: true },
-    { id: 'settings', visible: true, locked: true },
-    { id: 'web-search', visible: true },
-  ],
+  overviewTabs: defaultOverviewTabs,
   desktopFiles: {
     enabled: true,
     path: null, // null → автоматически ~/Desktop из XDG
@@ -41,6 +69,7 @@ function mergeSettings(saved = {}) {
     themeColors: { ...defaultSettings.themeColors, ...saved.themeColors },
     background: { ...defaultSettings.background, ...saved.background },
     desktopFiles: { ...defaultSettings.desktopFiles, ...saved.desktopFiles },
+    overviewTabs: normalizeOverviewTabs(saved.overviewTabs),
   };
 }
 

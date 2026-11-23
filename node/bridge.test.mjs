@@ -271,21 +271,24 @@ test('builds the original overview app list from built component and web apps', 
   try {
     for (const appPath of [
       path.join(root, 'componentapps', 'apps-list'),
+      path.join(root, 'webapps', 'browser'),
       path.join(root, 'webapps', 'music'),
       path.join(root, 'public', 'omniscience', 'componentapps', 'apps-list'),
+      path.join(root, 'public', 'omniscience', 'webapps', 'browser'),
       path.join(root, 'public', 'omniscience', 'webapps', 'music'),
     ]) {
       await mkdir(appPath, { recursive: true });
     }
-    await writeFile(path.join(root, 'config.json'), JSON.stringify({
-      homepageUrl: 'https://example.com',
-    }));
-    await writeFile(path.join(root, 'icon.ico'), 'browser-icon');
     await writeFile(path.join(root, 'componentapps', 'apps-list', 'index.html'), '');
     await writeFile(path.join(root, 'componentapps', 'apps-list', 'favicon.png'), 'icon');
+    await writeFile(path.join(root, 'webapps', 'browser', 'index.html'), '');
     await writeFile(path.join(root, 'webapps', 'music', 'index.html'), '');
     await writeFile(
       path.join(root, 'public', 'omniscience', 'componentapps', 'apps-list', 'index.html'),
+      '',
+    );
+    await writeFile(
+      path.join(root, 'public', 'omniscience', 'webapps', 'browser', 'index.html'),
       '',
     );
     await writeFile(
@@ -299,14 +302,14 @@ test('builds the original overview app list from built component and web apps', 
     );
     assert.deepEqual(apps.map(({ id, type, url }) => ({ id, type, url })), [
       {
-        id: 'new-browser-window',
-        type: 'browser',
-        url: 'https://example.com',
-      },
-      {
         id: 'apps-list',
         type: 'componentapp',
         url: '/omniscience/componentapps/apps-list/index.html',
+      },
+      {
+        id: 'browser',
+        type: 'webapp',
+        url: '/omniscience/webapps/browser/index.html',
       },
       {
         id: 'music',
@@ -317,10 +320,6 @@ test('builds the original overview app list from built component and web apps', 
     assert.equal(
       apps.find(({ id }) => id === 'apps-list').icon,
       `data:image/png;base64,${Buffer.from('icon').toString('base64')}`,
-    );
-    assert.equal(
-      apps.find(({ id }) => id === 'new-browser-window').icon,
-      `data:image/x-icon;base64,${Buffer.from('browser-icon').toString('base64')}`,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -794,24 +793,34 @@ test('reports Windows settings process startup failures', async () => {
   );
 });
 
-test('opens the configured homepage for the original browser card', async () => {
+test('opens the browser redirect as a regular webapp', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'omni-tauri-browser-'));
   try {
-    await writeFile(path.join(root, 'config.json'), JSON.stringify({
-      homepageUrl: 'https://example.com/start',
-    }));
-    await writeFile(path.join(root, 'icon.ico'), 'browser-icon');
+    const redirectPage = await readFile(
+      new URL('../webapps/browser/index.html', import.meta.url),
+      'utf8',
+    );
+    assert.match(redirectPage, /window\.location\.href\s*=\s*['"]https:\/\/www\.google\.com['"]/);
+    await mkdir(path.join(root, 'webapps', 'browser'), { recursive: true });
+    await mkdir(path.join(root, 'public', 'omniscience', 'webapps', 'browser'), {
+      recursive: true,
+    });
+    await writeFile(path.join(root, 'webapps', 'browser', 'index.html'), redirectPage);
+    await writeFile(
+      path.join(root, 'public', 'omniscience', 'webapps', 'browser', 'index.html'),
+      '<!doctype html>',
+    );
     const result = await handleRequest({
       method: 'open-program',
-      payload: { programId: 'new-browser-window' },
-    }, { projectRoot: root, platform: 'win32', themeSettings: DEFAULT_THEME_SETTINGS });
+      payload: { programId: 'browser' },
+    }, {
+      projectRoot: root,
+      platform: 'win32',
+      fileServerUrl: 'http://127.0.0.1:4321',
+    });
     assert.equal(result.kind, 'webapp');
-    assert.equal(result.name, 'Браузер');
-    assert.equal(result.url, 'https://example.com/start');
-    assert.equal(
-      result.icon,
-      `data:image/x-icon;base64,${Buffer.from('browser-icon').toString('base64')}`,
-    );
+    assert.equal(result.name, 'browser');
+    assert.equal(result.url, 'http://127.0.0.1:4321/webapps/browser/index.html');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1088,6 +1097,68 @@ test('lists and controls visible native app windows for the window controls', as
       payload: { id: '202', action: 'focus' },
     }, context),
     /no longer available/,
+  );
+});
+
+test('prepares hidden native-window drags at their matching cursor positions', async () => {
+  const requests = [];
+  const context = {
+    projectRoot: 'C:\\Omniscience',
+    platform: 'win32',
+    nativeWindowHost: {
+      async request(action, payload) {
+        requests.push({ action, payload });
+        if (action === 'list') {
+          return [{
+            id: '301',
+            title: 'Hidden app',
+            visible: true,
+            taskbarHidden: true,
+            focused: false,
+          }];
+        }
+        if (action === 'prepare-drag') {
+          return {
+            x: 100,
+            y: 120,
+            width: 800,
+            height: 600,
+            cursorX: 899,
+            cursorY: 719,
+            nativeDrag: true,
+          };
+        }
+        return true;
+      },
+    },
+  };
+
+  const drag = await handleRequest({
+    method: 'prepare-native-window-drag',
+    payload: { id: '301', mode: 'resize', direction: 'se' },
+  }, context);
+  assert.equal(drag.ok, true);
+  assert.deepEqual(drag.cursor, { x: 899, y: 719 });
+  assert.equal(drag.nativeDrag, true);
+  assert.deepEqual(requests.at(-1), {
+    action: 'prepare-drag',
+    payload: { hwnd: '301', mode: 'resize', direction: 'se' },
+  });
+
+  await handleRequest({
+    method: 'set-cursor-position',
+    payload: { x: -40, y: 210 },
+  }, context);
+  assert.deepEqual(requests.at(-1), {
+    action: 'cursor',
+    payload: { x: -40, y: 210 },
+  });
+  await assert.rejects(
+    handleRequest({
+      method: 'set-cursor-position',
+      payload: { x: 1.5, y: 210 },
+    }, context),
+    /32-bit integers/,
   );
 });
 

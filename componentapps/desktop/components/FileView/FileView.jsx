@@ -2,7 +2,9 @@ import React, {
     useState, useEffect, useCallback, useMemo, useRef,
 } from 'react';
 import {
-    Box, IconButton, Breadcrumbs, Link, Typography, CircularProgress,
+    Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle,
+    Divider, IconButton, Breadcrumbs, Link, Menu, MenuItem, TextField,
+    Typography, CircularProgress,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { motion, useMotionValue, useSpring, useTransform } from 'motion/react';
@@ -14,7 +16,7 @@ import { useSetting } from '../../../../src/settings/useSettings';
 /* Параметры кисти                                                     */
 /* ------------------------------------------------------------------ */
 
-const DEFAULT_BRUSH_RADIUS = 55;
+const DEFAULT_BRUSH_RADIUS = 0;
 const MIN_BRUSH_RADIUS = 3;
 const MAX_BRUSH_RADIUS = 400;
 const COLLAPSE_THRESHOLD = 2;
@@ -135,12 +137,12 @@ function FileItem({
     };
     const handleDoubleClick = (e) => {
         e.stopPropagation();
-        onOpen(file);
+        void onOpen(file);
     };
-    const handleMouseDown = (e) => {
-        if (e.button !== 2) return;
+    const handleContextMenu = (e) => {
+        e.preventDefault();
         e.stopPropagation();
-        onContextRequest(file);
+        onContextRequest(file, e);
     };
 
     const handleDragStart = (e) => {
@@ -158,8 +160,7 @@ function FileItem({
             draggable
             onClick={handleClick}
             onDoubleClick={handleDoubleClick}
-            onMouseDown={handleMouseDown}
-            onContextMenu={(e) => e.stopPropagation()}
+            onContextMenu={handleContextMenu}
             onDragStart={handleDragStart}
             title={file.infoTip || undefined}
             sx={{
@@ -224,6 +225,14 @@ function FileViewInner({ basePath }) {
     const [currentPath, setCurrentPath] = useState(basePath);
     const [selectedIds, setSelectedIds] = useState(() => new Set());
     const [cutPaths, setCutPaths] = useState(() => new Set());
+    const [contextMenu, setContextMenu] = useState(null);
+    const [nameDialog, setNameDialog] = useState(null);
+    const [nameInput, setNameInput] = useState('');
+    const [nameError, setNameError] = useState('');
+    const [deleteTarget, setDeleteTarget] = useState(null);
+    const [deleteError, setDeleteError] = useState('');
+    const [deleting, setDeleting] = useState(false);
+    const [actionError, setActionError] = useState('');
 
     /* --- Состояние кисти --- */
     const [inContainer, setInContainer] = useState(false);
@@ -399,17 +408,99 @@ function FileViewInner({ basePath }) {
     const handleOpen = useCallback(async (file) => {
         const api = window.electron_desktop_API;
         if (file.isDir) { handleOpenFolder(file.id); return; }
-        await api.openPath(file.id);
+        try {
+            await api.openPath(file.id);
+            setActionError('');
+        } catch (error) {
+            setActionError(error?.message || String(error));
+        }
     }, [handleOpenFolder]);
 
-    /* --- ПКМ / drag-out --- */
-    const handleItemContextRequest = useCallback((file) => {
-        const api = window.electron_desktop_API;
-        if (!api?.setContextPaths) return;
-        const selected = selectedIdsRef.current;
-        const paths = selected.has(file.id) ? [...selected] : [file.id];
-        api.setContextPaths({ kind: 'files', paths });
+    /* --- Контекстное меню / drag-out --- */
+    const handleItemContextRequest = useCallback((file, event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!selectedIdsRef.current.has(file.id)) {
+            const next = new Set([file.id]);
+            selectedIdsRef.current = next;
+            setSelectedIds(next);
+        }
+        setContextMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, file });
     }, []);
+
+    const handleBackgroundContextMenu = (event) => {
+        event.preventDefault();
+        setContextMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, file: null });
+    };
+
+    const openNameDialog = (type, file = null) => {
+        setContextMenu(null);
+        setNameDialog({ type, path: file?.id || null });
+        setNameInput(type === 'rename' ? file.name : '');
+        setNameError('');
+    };
+
+    const submitNameDialog = async (event) => {
+        event.preventDefault();
+        const name = nameInput.trim();
+        if (!name) {
+            setNameError('Введите имя.');
+            return;
+        }
+
+        const api = window.electron_desktop_API;
+        if (!api) {
+            setNameError('Файловый мост недоступен.');
+            return;
+        }
+
+        try {
+            let result;
+            if (nameDialog.type === 'folder') {
+                result = await api.createFolder(currentPath, name);
+            } else if (nameDialog.type === 'file') {
+                result = await api.createFile(currentPath, name);
+            } else {
+                result = await api.renamePath(nameDialog.path, name);
+            }
+            if (result?.success === false || result?.ok === false) {
+                throw new Error(result.error || 'Операция не выполнена.');
+            }
+            await reload();
+            setNameDialog(null);
+            setNameError('');
+            setActionError('');
+        } catch (error) {
+            setNameError(error?.message || String(error));
+        }
+    };
+
+    const confirmDelete = async () => {
+        if (!deleteTarget) return;
+        const api = window.electron_desktop_API;
+        if (!api?.trashPath) {
+            setDeleteError('Файловый мост не поддерживает перемещение в корзину.');
+            return;
+        }
+
+        setDeleting(true);
+        setDeleteError('');
+        try {
+            await api.trashPath(deleteTarget.id);
+            setSelectedIds((previous) => {
+                const next = new Set(previous);
+                next.delete(deleteTarget.id);
+                return next;
+            });
+            setDeleteTarget(null);
+            setActionError('');
+            await reload();
+        } catch (error) {
+            setDeleteError(error?.message || String(error));
+        } finally {
+            setDeleting(false);
+        }
+    };
 
     const handleItemDragRequest = useCallback((file) => {
         const api = window.electron_desktop_API;
@@ -640,6 +731,7 @@ function FileViewInner({ basePath }) {
     return (
         <Box
             title={directoryMetadata?.infoTip || undefined}
+            onContextMenu={handleBackgroundContextMenu}
             sx={{
                 position: 'absolute', inset: 0, zIndex: 0,
                 display: 'flex', flexDirection: 'column',
@@ -738,6 +830,12 @@ function FileViewInner({ basePath }) {
                 </Box>
             </Box>
 
+            {actionError && (
+                <Alert severity="error" onClose={() => setActionError('')} sx={{ mx: 1 }}>
+                    {actionError}
+                </Alert>
+            )}
+
             {/* Сетка файлов */}
             <Box
                 ref={containerRef}
@@ -828,6 +926,115 @@ function FileViewInner({ basePath }) {
                     />
                 )}
             </Box>
+
+            <Menu
+                open={Boolean(contextMenu)}
+                onClose={() => setContextMenu(null)}
+                anchorReference="anchorPosition"
+                anchorPosition={contextMenu
+                    ? { top: contextMenu.mouseY, left: contextMenu.mouseX }
+                    : undefined}
+            >
+                {contextMenu?.file && (
+                    <MenuItem onClick={() => {
+                        const file = contextMenu.file;
+                        setContextMenu(null);
+                        void handleOpen(file);
+                    }}>
+                        Открыть
+                    </MenuItem>
+                )}
+                <MenuItem onClick={() => openNameDialog('folder')}>Создать папку</MenuItem>
+                <MenuItem onClick={() => openNameDialog('file')}>Создать файл</MenuItem>
+                {contextMenu?.file && (
+                    <MenuItem onClick={() => openNameDialog('rename', contextMenu.file)}>
+                        Переименовать
+                    </MenuItem>
+                )}
+                {contextMenu?.file && (
+                    <MenuItem
+                        onClick={() => {
+                            setDeleteTarget(contextMenu.file);
+                            setDeleteError('');
+                            setContextMenu(null);
+                        }}
+                    >
+                        Удалить в корзину
+                    </MenuItem>
+                )}
+                <Divider />
+                <MenuItem onClick={() => {
+                    setContextMenu(null);
+                    void reload();
+                }}>
+                    Обновить
+                </MenuItem>
+            </Menu>
+
+            <Dialog
+                open={Boolean(nameDialog)}
+                onClose={() => setNameDialog(null)}
+                fullWidth
+                maxWidth="xs"
+            >
+                <Box component="form" onSubmit={submitNameDialog}>
+                    <DialogTitle>
+                        {nameDialog?.type === 'folder'
+                            ? 'Создать папку'
+                            : nameDialog?.type === 'file'
+                                ? 'Создать файл'
+                                : 'Переименовать'}
+                    </DialogTitle>
+                    <DialogContent>
+                        <TextField
+                            autoFocus
+                            fullWidth
+                            margin="dense"
+                            label="Имя"
+                            value={nameInput}
+                            onChange={(event) => setNameInput(event.target.value)}
+                            error={Boolean(nameError)}
+                            helperText={nameError}
+                        />
+                    </DialogContent>
+                    <DialogActions>
+                        <Button onClick={() => setNameDialog(null)}>Отмена</Button>
+                        <Button type="submit" variant="contained">Сохранить</Button>
+                    </DialogActions>
+                </Box>
+            </Dialog>
+
+            <Dialog
+                open={Boolean(deleteTarget)}
+                onClose={() => {
+                    if (!deleting) setDeleteTarget(null);
+                }}
+                fullWidth
+                maxWidth="xs"
+            >
+                <DialogTitle>Переместить в корзину?</DialogTitle>
+                <DialogContent>
+                    <Typography>
+                        «{deleteTarget?.name}» можно будет восстановить из корзины.
+                    </Typography>
+                    {deleteError && (
+                        <Alert severity="error" sx={{ mt: 2 }}>{deleteError}</Alert>
+                    )}
+                </DialogContent>
+                <DialogActions>
+                    <Button disabled={deleting} onClick={() => setDeleteTarget(null)}>
+                        Отмена
+                    </Button>
+                    <Button
+                        color="error"
+                        variant="contained"
+                        disabled={deleting}
+                        onClick={() => void confirmDelete()}
+                    >
+                        {deleting ? 'Удаление…' : 'В корзину'}
+                    </Button>
+                </DialogActions>
+            </Dialog>
         </Box>
     );
 }

@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { Tabs, Tab, Box } from '@mui/material';
 import TabsTab from './TabsTab';
 import BackgroundTab from './BackgroundTab';
-import AnimationTab from './AnimationTab';
 import DesktopTab from './DesktopTab';
 import WindowsTab from './WindowsTab';
 
@@ -21,16 +20,14 @@ export default function App() {
         sx={{ mb: 2 }}
       >
         <Tab label="🧩 Вкладки" />
-        <Tab label="✨ Анимации" />
         <Tab label="🖼️ Фон" />
         <Tab label="🖥️ Рабочий стол" />
         {isWindows && <Tab label="🛡️ Windows" />}
       </Tabs>
       {tab === 0 && <TabsTab />}
-      {tab === 1 && <AnimationTab />}
-      {tab === 2 && <BackgroundTab />}
-      {tab === 3 && <DesktopTab />}
-      {isWindows && tab === 4 && <WindowsTab />}
+      {tab === 1 && <BackgroundTab />}
+      {tab === 2 && <DesktopTab />}
+      {isWindows && tab === 3 && <WindowsTab />}
     </Box>
   );
 }

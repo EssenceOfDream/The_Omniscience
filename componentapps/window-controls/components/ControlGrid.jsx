@@ -189,6 +189,7 @@ export default function ControlGrid({ activeWindow, onOpenWindowSettings }) {
     // Запрашиваем main: получить bounds + варпнуть курсор в целевую точку
     callNative('native-window:prepare-drag', {
       id: aw.id,
+      kind: aw.kind || (webWindow ? 'our' : 'native'),
       mode,
       direction: direction || null,
     }).then((res) => {

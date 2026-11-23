@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import {
   Box, Typography, Switch, IconButton, Divider, Stack, Alert,
 } from '@mui/material';
@@ -7,26 +7,28 @@ import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import LockIcon from '@mui/icons-material/Lock';
 import { useViewSetting, viewDispatch } from '@viewRuntime';
 
+const availableTabs = [
+  { id: 'apps-list', title: 'Приложения' },
+  { id: 'open-windows', title: 'Открытые окна' },
+  { id: 'settings', title: 'Настройки', locked: true },
+];
+
 export default function TabsTab() {
-  const config = useViewSetting('settings.overviewTabs') || [];
-  const [apps, setApps] = useState([]);
-
-  useEffect(() => {
-    window.electron_view_API?.getAppsList?.().then(setApps).catch(() => {});
-  }, []);
-
-  // Собранный список: сначала всё из config (в порядке), потом остальные приложения
+  const savedConfig = useViewSetting('settings.overviewTabs');
+  const config = Array.isArray(savedConfig) ? savedConfig : [];
   const rows = useMemo(() => {
     const configIds = new Set(config.map((e) => e.id));
-    const configured = config.map((e) => ({
+    const configured = config
+      .filter((entry) => availableTabs.some((tab) => tab.id === entry.id))
+      .map((e) => ({
       ...e,
-      app: apps.find((a) => a.id === e.id) || null,
+      tab: availableTabs.find((tab) => tab.id === e.id),
     }));
-    const rest = apps
-      .filter((a) => !configIds.has(a.id))
-      .map((a) => ({ id: a.id, visible: false, locked: false, app: a }));
+    const rest = availableTabs
+      .filter((tab) => !configIds.has(tab.id))
+      .map((tab) => ({ ...tab, visible: false }));
     return [...configured, ...rest];
-  }, [config, apps]);
+  }, [config]);
 
   const update = (newConfig) => viewDispatch('updateSetting', {
     path: 'overviewTabs',
@@ -34,6 +36,7 @@ export default function TabsTab() {
   });
 
   const toggle = (id) => {
+    if (availableTabs.find((tab) => tab.id === id)?.locked) return;
     const entry = config.find((e) => e.id === id);
     if (entry?.locked) return;
     if (entry) {
@@ -64,8 +67,8 @@ export default function TabsTab() {
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
         {rows.map((row) => {
           const inConfig = config.some((e) => e.id === row.id);
-          const isLocked = !!row.locked;
-          const label = row.app?.title || row.id;
+          const isLocked = !!row.locked || !!row.tab?.locked;
+          const label = row.tab?.title || row.title || row.id;
 
           return (
             <Box

@@ -1014,6 +1014,57 @@ async function manageNativeWindow(payload, context) {
   return { success: true };
 }
 
+async function prepareNativeWindowDrag(payload, context) {
+  const { id, mode, direction } = payload ?? {};
+  if (typeof id !== 'string' || !/^[1-9]\d*$/.test(id)) {
+    throw new Error('A valid native-window id is required');
+  }
+  if (mode !== 'move' && mode !== 'resize') {
+    throw new Error('Unsupported native-window drag mode');
+  }
+  const resizeDirections = ['nw', 'n', 'ne', 'w', 'e', 'sw', 's', 'se'];
+  if (mode === 'resize' && !resizeDirections.includes(direction)) {
+    throw new Error('Unsupported native-window resize direction');
+  }
+
+  const windows = await listHiddenWindows(context);
+  if (!windows.some((window) => window.id === id)) {
+    return { ok: false, abort: true };
+  }
+
+  const nativeHost = getWindowsNativeHost(context);
+  const result = await nativeHost.request('prepare-drag', {
+    hwnd: id,
+    mode,
+    direction: direction ?? '',
+  });
+  if (!result) return { ok: false, abort: true };
+  return {
+    ok: true,
+    bounds: {
+      x: result.x,
+      y: result.y,
+      width: result.width,
+      height: result.height,
+    },
+    cursor: { x: result.cursorX, y: result.cursorY },
+    nativeDrag: Boolean(result.nativeDrag),
+  };
+}
+
+async function setCursorPosition(payload, context) {
+  const { x, y } = payload ?? {};
+  const isInt32 = (value) => Number.isInteger(value)
+    && value >= -2147483648 && value <= 2147483647;
+  if (!isInt32(x) || !isInt32(y)) {
+    throw new Error('Cursor coordinates must be valid 32-bit integers');
+  }
+  const nativeHost = getWindowsNativeHost(context);
+  const result = await nativeHost.request('cursor', { x, y });
+  if (result !== true) throw new Error('Could not move the cursor');
+  return { ok: true };
+}
+
 async function getExplorerShellStatus(context) {
   const nativeHost = getWindowsNativeHost(context);
   return nativeHost.request('explorer-shell-status');
@@ -1495,37 +1546,9 @@ async function getProgramIcon(projectRoot, category, name) {
   return null;
 }
 
-async function getProjectIcon(projectRoot) {
-  try {
-    const icon = await readFile(path.join(projectRoot, 'icon.ico'));
-    return `data:image/x-icon;base64,${icon.toString('base64')}`;
-  } catch (error) {
-    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
-    throw error;
-  }
-}
-
-async function getHomepageUrl(projectRoot) {
-  try {
-    const config = JSON.parse(await readFile(path.join(projectRoot, 'config.json'), 'utf8'));
-    return typeof config.homepageUrl === 'string' ? config.homepageUrl : '';
-  } catch (error) {
-    if (error.code === 'ENOENT') return '';
-    throw error;
-  }
-}
-
 async function getOverviewApps(projectRoot, platform) {
-  const homepageUrl = await getHomepageUrl(projectRoot);
-  const apps = [{
-    id: 'new-browser-window',
-    type: 'browser',
-    title: 'Браузер',
-    url: homepageUrl || null,
-    icon: await getProjectIcon(projectRoot),
-    launchable: Boolean(homepageUrl),
-  }];
   const programs = await listPrograms(projectRoot, platform);
+  const apps = [];
 
   for (const program of programs) {
     if (program.category !== 'componentapps' && program.category !== 'webapps') continue;
@@ -1608,19 +1631,6 @@ export async function handleRequest(request, context) {
     return context.themeSettings ?? { ...DEFAULT_THEME_SETTINGS };
   }
   if (request?.method === 'open-program') {
-    if (request.payload?.programId === 'new-browser-window') {
-      const homepageUrl = await getHomepageUrl(projectRoot);
-      if (!homepageUrl) throw new Error('A homepage URL is not configured');
-      return {
-        kind: 'webapp',
-        name: 'Браузер',
-        url: homepageUrl,
-        icon: await getProjectIcon(projectRoot),
-        themeSettings: typeof context === 'string'
-          ? { ...DEFAULT_THEME_SETTINGS }
-          : context.themeSettings ?? { ...DEFAULT_THEME_SETTINGS },
-      };
-    }
     const programs = await listPrograms(
       projectRoot,
       typeof context === 'string' ? process.platform : context.platform ?? process.platform,
@@ -1682,6 +1692,12 @@ export async function handleRequest(request, context) {
   }
   if (request?.method === 'manage-native-window') {
     return manageNativeWindow(request.payload, context);
+  }
+  if (request?.method === 'prepare-native-window-drag') {
+    return prepareNativeWindowDrag(request.payload, context);
+  }
+  if (request?.method === 'set-cursor-position') {
+    return setCursorPosition(request.payload, context);
   }
   if (request?.method === 'open-windows-settings-category') {
     return openWindowsSettingsCategory(request.payload, context);
