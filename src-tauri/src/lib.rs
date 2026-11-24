@@ -16,6 +16,9 @@ use tauri::{
     WebviewWindowBuilder, WindowEvent, menu::{MenuBuilder, MenuItemBuilder},
 };
 
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 static PROGRAM_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 const WINDOW_CONTROLS_WIDTH: f64 = 104.0;
 const WINDOW_CONTROLS_HEIGHT: f64 = 62.0;
@@ -104,10 +107,17 @@ fn start_node_bridge() -> Result<NodeRuntime, String> {
         .canonicalize()
         .map_err(|error| format!("Could not resolve Node bridge: {error}"))?;
 
-    let mut child = Command::new("node")
+    let mut command = Command::new("node");
+    command
         .arg(script_path)
         .arg(&project_root)
-        .arg(std::process::id().to_string())
+        .arg(std::process::id().to_string());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -553,6 +563,7 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
     let panel =
         WebviewWindowBuilder::new(app, "panel", WebviewUrl::App(PathBuf::from("panel.html")))
             .title("Omniscience panel")
+            .devtools(true)
             .position(geometry.panel.x, geometry.panel.y)
             .inner_size(geometry.panel.width, geometry.panel.height)
             .decorations(false)
@@ -575,6 +586,7 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
         WebviewUrl::App(PathBuf::from("controls.html")),
     )
     .title("Omniscience window controls")
+    .devtools(true)
     .position(geometry.controls.x, geometry.controls.y)
     .inner_size(geometry.controls.width, geometry.controls.height)
     .decorations(false)
@@ -1259,6 +1271,7 @@ fn build_overview_window(app: &AppHandle, geometry: WorkspaceGeometry) -> Result
         WebviewUrl::App(PathBuf::from("overview.html")),
     )
     .title("Omniscience overview")
+    .devtools(true)
     .position(geometry.screen.x, overview_y)
     .inner_size(geometry.screen.width, overview_height)
     .decorations(false)
@@ -1486,6 +1499,7 @@ async fn open_window_settings(app: AppHandle, label: String) -> Result<(), Strin
         WebviewUrl::App(PathBuf::from("window-settings.html")),
     )
     .title("Параметры окна")
+    .devtools(true)
     .center()
     .inner_size(340.0, 360.0)
     .decorations(false)
@@ -1691,6 +1705,7 @@ async fn open_program(
             WebviewUrl::App(PathBuf::from(app_path)),
         )
         .title(name)
+        .devtools(true)
         .inner_size(width, height)
         .decorations(false)
         .transparent(true)
@@ -1721,6 +1736,7 @@ async fn open_program(
         let initialization_script = window_chrome_initialization_script(&theme_settings)?;
         let builder = WebviewWindowBuilder::new(&app, label.clone(), WebviewUrl::External(url))
             .title(name)
+            .devtools(true)
             .inner_size(1000.0, 720.0)
             .decorations(false)
             .transparent(true)
