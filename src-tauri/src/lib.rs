@@ -12,8 +12,8 @@ use std::{
     time::Duration,
 };
 use tauri::{
-    AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-    WindowEvent,
+    AppHandle, Emitter, LogicalPosition, Manager, RunEvent, State, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, WindowEvent, menu::{MenuBuilder, MenuItemBuilder},
 };
 
 static PROGRAM_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
@@ -26,6 +26,9 @@ const THEME_CONTENT_JS: &str = include_str!("../../extensions/omni-theme/content
 mod componentapp_backends {
     include!(concat!(env!("OUT_DIR"), "/componentapp_backends.rs"));
 }
+
+#[cfg(target_os = "windows")]
+mod windows_drag;
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -66,9 +69,13 @@ impl Drop for NodeRuntime {
 
 struct NodeBridge(Arc<Mutex<NodeRuntime>>);
 
+struct IconNodeBridge(Arc<Mutex<NodeRuntime>>);
+
 struct ProgramWindowIcons(Mutex<HashMap<String, String>>);
 
 struct ThemeSettingsState(Mutex<Value>);
+
+struct DesktopContextMenuState(Mutex<Value>);
 
 #[derive(Clone, Copy)]
 struct WindowBounds {
@@ -741,8 +748,25 @@ fn component_app_init_script(
     closeWindow: () => window.__TAURI__.window.getCurrentWindow().close(),
     invoke: (channel, ...args) => componentInvoke(channel, ...args),
     readDir,
-    openPath: (path) => window.__TAURI__.opener.openPath(path),
-    getFileIcon: (path) => invoke("get-file-icon", { path }),
+    openPath: (path) => invoke("open-path", { path }),
+    openWith: (path) => invoke("open-with", { path }),
+    revealPath: (path) => invoke("reveal-path", { path }),
+    copyFiles: (paths) => invoke("copy-files", { paths }),
+    cutFiles: (paths) => invoke("cut-files", { paths }),
+    pasteFiles: (dir) => invoke("paste-files", { dir }),
+    dropPaths: (paths, dir, isMove = false) => invoke("drop-paths", { paths, dir, isMove }),
+    writeDroppedFiles: (files, dir) => invoke("write-dropped-files", { files, dir }),
+    startDrag: (paths) => window.__TAURI__.core.invoke("start_file_drag", { paths }),
+    getCutPaths: () => invoke("get-cut-paths", {}),
+    clearCut: () => invoke("clear-cut", {}),
+    deletePath: (path) => invoke("delete-path", { path }),
+    showContextMenu: (options) => window.__TAURI__.core.invoke("show_desktop_context_menu", options),
+    getFileIcon: async (path) => {
+      const icons = await window.__TAURI__.core.invoke("get_file_icons", { paths: [path] });
+      const fileUrl = icons[path] || null;
+      return { success: Boolean(fileUrl), fileUrl };
+    },
+    getFileIcons: (paths) => window.__TAURI__.core.invoke("get_file_icons", { paths }),
     watchStart: (path) => {
       if (watchedDirectories.has(path)) return;
       const timer = window.setInterval(async () => {
@@ -777,6 +801,12 @@ fn component_app_init_script(
     createFile: (dir, name) => operation("create-file", { parentPath: dir, name }),
     renamePath: (path, name) => operation("rename-path", { path, name }),
   };
+  window.__TAURI__.event.listen("desktop-context-menu-action", ({ payload }) => {
+    emitDesktop("desktop-context-menu-action", payload);
+  }).catch((error) => console.error("[desktop] context menu event listener failed:", error));
+  window.__TAURI__.event.listen("tauri://drag-drop", ({ payload }) => {
+    emitDesktop("desktop-native-drop", payload);
+  }).catch((error) => console.error("[desktop] file drop listener failed:", error));
   window.electron_componentapp_API = { invoke: componentInvoke };
   window.electron_view_API = {
     getAppsList: () => invoke("get-apps-list", {}),
@@ -992,6 +1022,49 @@ async fn node_request(
 }
 
 #[tauri::command]
+async fn start_file_drag(window: WebviewWindow, paths: Vec<String>) -> Result<(), String> {
+    if paths.is_empty() {
+        return Err("At least one file path is required".to_string());
+    }
+    let paths = paths
+        .into_iter()
+        .map(|value| {
+            let path = PathBuf::from(value);
+            if !path.is_absolute() {
+                return Err("Absolute file paths are required for dragging".to_string());
+            }
+            std::fs::metadata(&path)
+                .map_err(|error| format!("Could not access {}: {error}", path.display()))?;
+            Ok(path)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    #[cfg(target_os = "windows")]
+    {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        window
+            .run_on_main_thread(move || {
+                let _ = sender.send(windows_drag::start(paths));
+            })
+            .map_err(|error| format!("Could not start file drag on the UI thread: {error}"))?;
+
+        return tauri::async_runtime::spawn_blocking(move || {
+            receiver
+                .recv()
+                .map_err(|error| format!("File drag did not complete: {error}"))?
+        })
+        .await
+        .map_err(|error| format!("File drag task failed: {error}"))?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (window, paths);
+        Err("Native file dragging is only supported on Windows".to_string())
+    }
+}
+
+#[tauri::command]
 fn trash_path(path: String) -> Result<(), String> {
     let path = PathBuf::from(path);
     if !path.is_absolute() || path.file_name().is_none() {
@@ -1001,6 +1074,140 @@ fn trash_path(path: String) -> Result<(), String> {
     trash::delete(&path).map_err(|error| {
         format!("Could not move {} to the system trash: {error}", path.display())
     })
+}
+
+#[tauri::command]
+fn show_desktop_context_menu(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, DesktopContextMenuState>,
+    kind: String,
+    paths: Vec<String>,
+    directory: String,
+    x: f64,
+    y: f64,
+    cut_count: usize,
+) -> Result<(), String> {
+    if kind != "background" && kind != "files" {
+        return Err("Unsupported desktop context menu kind".to_string());
+    }
+    if !PathBuf::from(&directory).is_absolute()
+        || ![x, y].into_iter().all(f64::is_finite)
+        || paths.iter().any(|path| !PathBuf::from(path).is_absolute())
+    {
+        return Err("Invalid desktop context menu location or paths".to_string());
+    }
+    if kind == "files" && paths.is_empty() {
+        return Err("At least one file is required for this context menu".to_string());
+    }
+
+    *state
+        .0
+        .lock()
+        .map_err(|_| "Desktop context menu state is unavailable".to_string())? = json!({
+            "kind": kind,
+            "paths": paths,
+            "directory": directory
+        });
+
+    let mut menu = MenuBuilder::new(&app);
+    if kind == "background" {
+        let header =
+            MenuItemBuilder::with_id("desktop-context:header", "Рабочий стол")
+                .enabled(false)
+                .build(&app)
+                .map_err(|error| format!("Could not build desktop menu header: {error}"))?;
+        menu = menu
+            .item(&header)
+            .separator()
+            .text("desktop-context:create-folder", "Создать папку")
+            .text("desktop-context:create-file", "Создать файл")
+            .separator()
+            .text("desktop-context:paste", "Вставить");
+        if cut_count > 0 {
+            menu = menu.text(
+                "desktop-context:undo-cut",
+                format!("Отменить вырезание ({cut_count})"),
+            );
+        }
+        menu = menu
+            .separator()
+            .text("desktop-context:refresh", "Обновить")
+            .text("desktop-context:reveal", "Показать в файловом менеджере");
+    } else {
+        let count = paths.len();
+        let only_one = count == 1;
+        let open_with_item = MenuItemBuilder::with_id(
+            "desktop-context:open-with",
+            "Открыть с помощью…",
+        )
+        .enabled(only_one)
+        .build(&app)
+        .map_err(|error| format!("Could not build Open With menu item: {error}"))?;
+        let rename_item =
+            MenuItemBuilder::with_id("desktop-context:rename", "Переименовать")
+                .enabled(only_one)
+                .build(&app)
+                .map_err(|error| format!("Could not build Rename menu item: {error}"))?;
+        let reveal_item =
+            MenuItemBuilder::with_id(
+                "desktop-context:reveal",
+                "Показать в файловом менеджере",
+            )
+            .enabled(only_one)
+            .build(&app)
+            .map_err(|error| format!("Could not build Reveal menu item: {error}"))?;
+        let header_text = if only_one {
+            "Файл".to_string()
+        } else {
+            format!("Выделено файлов: {count}")
+        };
+        let header = MenuItemBuilder::with_id("desktop-context:header", header_text)
+            .enabled(false)
+            .build(&app)
+            .map_err(|error| format!("Could not build file menu header: {error}"))?;
+        menu = menu
+            .item(&header)
+            .separator()
+            .text(
+                "desktop-context:open",
+                if only_one { "Открыть".to_string() } else { format!("Открыть все ({count})") },
+            )
+            .item(&open_with_item)
+            .separator()
+            .item(&rename_item)
+            .text(
+                "desktop-context:copy-path",
+                if only_one { "Скопировать путь".to_string() } else { format!("Скопировать {count} путей") },
+            )
+            .item(&reveal_item)
+            .separator()
+            .text("desktop-context:copy", "Копировать")
+            .text("desktop-context:cut", "Вырезать")
+            .text("desktop-context:paste", "Вставить");
+        if cut_count > 0 {
+            menu = menu.text(
+                "desktop-context:undo-cut",
+                format!("Отменить вырезание ({cut_count})"),
+            );
+        }
+        menu = menu
+            .separator()
+            .text(
+                "desktop-context:trash",
+                if only_one { "Удалить в корзину".to_string() } else { format!("Удалить {count} в корзину") },
+            )
+            .text(
+                "desktop-context:delete",
+                if only_one { "Удалить безвозвратно".to_string() } else { format!("Удалить безвозвратно ({count})") },
+            );
+    }
+    let menu = menu
+        .build()
+        .map_err(|error| format!("Could not build desktop context menu: {error}"))?;
+    window
+        .popup_menu_at(&menu, LogicalPosition::new(x, y))
+        .map_err(|error| format!("Could not show desktop context menu: {error}"))
 }
 
 #[tauri::command]
@@ -1561,7 +1768,10 @@ pub fn run() {
         .setup(|app| {
             let runtime = start_node_bridge().map_err(std::io::Error::other)?;
             app.manage(NodeBridge(Arc::new(Mutex::new(runtime))));
+            let icon_runtime = start_node_bridge().map_err(std::io::Error::other)?;
+            app.manage(IconNodeBridge(Arc::new(Mutex::new(icon_runtime))));
             app.manage(ProgramWindowIcons(Mutex::new(HashMap::new())));
+            app.manage(DesktopContextMenuState(Mutex::new(Value::Null)));
             let theme_settings = {
                 let node_bridge = app.state::<NodeBridge>();
                 let mut runtime = node_bridge
@@ -1575,9 +1785,35 @@ pub fn run() {
             app.manage(geometry);
             Ok(())
         })
+        .on_menu_event(|app, event| {
+            let Some(action) = event.id().as_ref().strip_prefix("desktop-context:") else {
+                return;
+            };
+            let Some(state) = app.try_state::<DesktopContextMenuState>() else {
+                eprintln!("[desktop] context menu state is unavailable");
+                return;
+            };
+            let context = match state.0.lock() {
+                Ok(mut context) => std::mem::replace(&mut *context, Value::Null),
+                Err(_) => {
+                    eprintln!("[desktop] context menu state lock is unavailable");
+                    return;
+                }
+            };
+            if let Err(error) = app.emit_to(
+                "desktop",
+                "desktop-context-menu-action",
+                json!({ "action": action, "context": context }),
+            ) {
+                eprintln!("[desktop] could not dispatch context menu action: {error}");
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             node_request,
+            start_file_drag,
+            get_file_icons,
             trash_path,
+            show_desktop_context_menu,
             componentapp_request,
             toggle_overview,
             open_overview,
@@ -1604,6 +1840,19 @@ pub fn run() {
             start_workspace_position_watchdog(app.clone(), geometry.taskbar_height);
         }
     });
+}
+
+#[tauri::command]
+async fn get_file_icons(
+    state: State<'_, IconNodeBridge>,
+    paths: Vec<String>,
+) -> Result<Value, String> {
+    call_node(
+        Arc::clone(&state.0),
+        "get-file-icons".to_string(),
+        json!({ "paths": paths }),
+    )
+    .await
 }
 
 #[tauri::command]

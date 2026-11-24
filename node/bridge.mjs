@@ -1,4 +1,5 @@
 import { createReadStream } from 'node:fs';
+import { constants as fsConstants } from 'node:fs';
 import { createServer } from 'node:http';
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -6,9 +7,12 @@ import {
   lstat,
   mkdir,
   open,
+  copyFile,
+  cp,
   readFile,
   readdir,
   rename,
+  rm,
   stat,
   unlink,
   writeFile,
@@ -42,6 +46,8 @@ const categories = ['componentapps', 'webapps', 'extensions'];
 const execFileAsync = promisify(execFile);
 const terminalSessions = new Map();
 const minServers = new Map();
+let desktopClipboardPaths = [];
+let desktopCutPaths = [];
 let activeArchiverJob = null;
 let wifiInitialized = false;
 const defaultWindowsIconState = {
@@ -386,22 +392,46 @@ function absoluteFilePath(value) {
   return path.resolve(value);
 }
 
-async function getFileIcon(payload, context) {
-  const filePath = absoluteFilePath(payload?.path);
-  const info = await stat(filePath);
-  if (!info.isFile() && !info.isDirectory()) {
-    return { success: false, fileUrl: null };
-  }
+function isPathInside(candidate, directory) {
+  const relativePath = path.relative(directory, candidate);
+  return relativePath === ''
+    || (relativePath !== '..'
+      && !relativePath.startsWith(`..${path.sep}`)
+      && !path.isAbsolute(relativePath));
+}
 
+async function getFileIcons(payload, context) {
+  const paths = Array.isArray(payload?.paths) ? payload.paths : [];
+  const resolvedPaths = paths.map(absoluteFilePath);
+  const entries = await Promise.all(resolvedPaths.map(async (filePath) => {
+    try {
+      const info = await stat(filePath);
+      return info.isFile() || info.isDirectory() ? filePath : null;
+    } catch (error) {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
+      throw error;
+    }
+  }));
+  const validPaths = entries.filter(Boolean);
   const platform = typeof context === 'string'
     ? process.platform
     : context.platform ?? process.platform;
-  if (platform !== 'win32') {
-    return { success: false, fileUrl: null };
-  }
+  if (platform !== 'win32') return Object.fromEntries(resolvedPaths.map((filePath) => [filePath, null]));
 
-  const icons = await getWindowsIcons([{ id: 'desktop-file-icon', path: filePath }], context);
-  const fileUrl = icons.get('desktop-file-icon') || null;
+  const icons = await getWindowsIcons(
+    validPaths.map((filePath) => ({ id: filePath, path: filePath })),
+    context,
+  );
+  return Object.fromEntries(resolvedPaths.map((filePath, index) => [
+    filePath,
+    entries[index] ? icons.get(filePath) || null : null,
+  ]));
+}
+
+async function getFileIcon(payload, context) {
+  const filePath = absoluteFilePath(payload?.path);
+  const icons = await getFileIcons({ paths: [filePath] }, context);
+  const fileUrl = icons[filePath] || null;
   return { success: Boolean(fileUrl), fileUrl };
 }
 
@@ -1188,6 +1218,262 @@ export async function renameEntry(payload) {
   return { path: targetPath };
 }
 
+async function validateExistingPaths(paths) {
+  if (!Array.isArray(paths) || paths.length === 0) {
+    throw new Error('At least one file path is required');
+  }
+  const resolvedPaths = paths.map(absoluteFilePath);
+  for (const filePath of resolvedPaths) await lstat(filePath);
+  return resolvedPaths;
+}
+
+async function openFilePath(payload, context) {
+  const filePath = absoluteFilePath(payload?.path);
+  await lstat(filePath);
+  const platform = typeof context === 'string' ? process.platform : context.platform ?? process.platform;
+  if (platform === 'win32') {
+    const nativeHost = getWindowsNativeHost(context);
+    const result = await nativeHost.request('open-path', { path: filePath });
+    if (result !== true) throw new Error(`Could not open ${filePath}`);
+    return { opened: true };
+  }
+
+  const executable = platform === 'darwin' ? 'open' : 'xdg-open';
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, [filePath], { detached: true, stdio: 'ignore' });
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolve({ opened: true });
+    });
+  });
+}
+
+async function openFileWith(payload, context) {
+  const filePath = absoluteFilePath(payload?.path);
+  await lstat(filePath);
+  const platform = typeof context === 'string' ? process.platform : context.platform ?? process.platform;
+  if (platform !== 'win32') {
+    throw new Error('Open With is only supported on Windows');
+  }
+  const spawnProcess = typeof context === 'string' ? spawn : context.spawnProcess ?? spawn;
+  return new Promise((resolve, reject) => {
+    const child = spawnProcess('rundll32.exe', ['shell32.dll,OpenAs_RunDLL', filePath], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    const onError = (error) => reject(error);
+    child.once('error', onError);
+    child.once('spawn', () => {
+      child.removeListener('error', onError);
+      child.unref();
+      resolve({ opened: true });
+    });
+  });
+}
+
+async function revealFilePath(payload, context) {
+  const filePath = absoluteFilePath(payload?.path);
+  const info = await stat(filePath);
+  return openFilePath({ path: info.isDirectory() ? filePath : path.dirname(filePath) }, context);
+}
+
+async function setDesktopClipboard(payload, mode, context) {
+  const paths = await validateExistingPaths(payload?.paths);
+  const platform = typeof context === 'string' ? null : context.platform ?? process.platform;
+  if (platform === 'win32') {
+    const result = await getWindowsNativeHost(context).request('set-file-clipboard', {
+      paths,
+      isCut: mode === 'cut',
+    });
+    if (result !== true) throw new Error('Could not copy file paths to the Windows clipboard');
+  }
+  desktopClipboardPaths = paths;
+  desktopCutPaths = mode === 'cut' ? paths : [];
+  return { success: true, count: paths.length, cutPaths: [...desktopCutPaths] };
+}
+
+async function getDesktopClipboard(context) {
+  const platform = typeof context === 'string' ? null : context.platform ?? process.platform;
+  if (platform === 'win32') {
+    const clipboard = await getWindowsNativeHost(context).request('get-file-clipboard');
+    if (clipboard && Array.isArray(clipboard.paths)) {
+      desktopClipboardPaths = clipboard.paths.filter((value) => typeof value === 'string');
+      desktopCutPaths = clipboard.isCut ? [...desktopClipboardPaths] : [];
+    }
+  }
+  return { paths: [...desktopClipboardPaths], isCut: desktopCutPaths.length > 0 };
+}
+
+async function pasteDesktopClipboard(payload, context) {
+  const directory = absoluteDirectory({ path: payload?.dir });
+  if (!(await stat(directory)).isDirectory()) throw new Error('Paste destination is not a directory');
+  const clipboard = await getDesktopClipboard(context);
+  const clipboardPaths = clipboard.paths;
+  const isCut = clipboard.isCut;
+  if (clipboardPaths.length === 0) return { success: false, error: 'empty_clipboard', results: [] };
+  const results = [];
+  for (const source of clipboardPaths) {
+    const destination = path.join(directory, path.basename(source));
+    try {
+      if (path.dirname(source) === directory) {
+        throw new Error('Source and destination are the same directory');
+      }
+      const sourceInfo = await lstat(source);
+      if (sourceInfo.isDirectory() && isPathInside(directory, source)) {
+        throw new Error('A directory cannot be pasted into itself');
+      }
+      try {
+        await lstat(destination);
+        throw Object.assign(new Error('Destination already exists'), { code: 'EEXIST' });
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+      if (isCut) {
+        try {
+          await rename(source, destination);
+        } catch (error) {
+          if (error.code !== 'EXDEV') throw error;
+          await cp(source, destination, { recursive: true, errorOnExist: true, force: false });
+          await rm(source, { recursive: true, force: false });
+        }
+      } else {
+        if (sourceInfo.isDirectory()) {
+          await cp(source, destination, { recursive: true, errorOnExist: true, force: false });
+        } else {
+          await copyFile(source, destination, fsConstants.COPYFILE_EXCL);
+        }
+      }
+      results.push({ source, destination, success: true });
+    } catch (error) {
+      results.push({ source, destination, success: false, error: error.message });
+    }
+  }
+
+  if (isCut && results.some((result) => result.success)) {
+    const failedSources = new Set(results.filter((result) => !result.success).map((result) => result.source));
+    desktopClipboardPaths = clipboardPaths.filter((source) => failedSources.has(source));
+    desktopCutPaths = [...desktopClipboardPaths];
+    if ((typeof context === 'string' ? null : context.platform ?? process.platform) === 'win32') {
+      const nativeResult = await getWindowsNativeHost(context).request(
+        desktopClipboardPaths.length > 0 ? 'set-file-clipboard' : 'clear-file-clipboard',
+        desktopClipboardPaths.length > 0
+          ? { paths: desktopClipboardPaths, isCut: true }
+          : {},
+      );
+      if (nativeResult !== true) throw new Error('Could not update the Windows file clipboard');
+    }
+  }
+  return { success: results.every((result) => result.success), results, cutPaths: [...desktopCutPaths] };
+}
+
+async function dropFilePaths(payload) {
+  const sources = await validateExistingPaths(payload?.paths);
+  const directory = absoluteDirectory({ path: payload?.dir });
+  if (!(await stat(directory)).isDirectory()) throw new Error('Drop destination is not a directory');
+
+  const results = [];
+  for (const source of sources) {
+    const destination = path.join(directory, path.basename(source));
+    try {
+      if (path.dirname(source) === directory) {
+        throw new Error('Source and destination are the same directory');
+      }
+      const sourceInfo = await lstat(source);
+      if (sourceInfo.isDirectory() && isPathInside(directory, source)) {
+        throw new Error('A directory cannot be dropped into itself');
+      }
+      try {
+        await lstat(destination);
+        throw Object.assign(new Error('Destination already exists'), { code: 'EEXIST' });
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+      const isMove = payload?.isMove === true;
+      if (isMove) {
+        try {
+          await rename(source, destination);
+        } catch (error) {
+          if (error.code !== 'EXDEV') throw error;
+          await cp(source, destination, { recursive: true, errorOnExist: true, force: false });
+          await rm(source, { recursive: true, force: false });
+        }
+      } else {
+        if (sourceInfo.isDirectory()) {
+          await cp(source, destination, { recursive: true, errorOnExist: true, force: false });
+        } else {
+          await copyFile(source, destination, fsConstants.COPYFILE_EXCL);
+        }
+      }
+      results.push({ source, destination, success: true });
+    } catch (error) {
+      results.push({ source, destination, success: false, error: error.message });
+    }
+  }
+  return { success: results.every((result) => result.success), results };
+}
+
+async function writeDroppedFiles(payload) {
+  const directory = absoluteDirectory({ path: payload?.dir });
+  if (!(await stat(directory)).isDirectory()) throw new Error('Drop destination is not a directory');
+  if (!Array.isArray(payload?.files) || payload.files.length === 0) {
+    throw new Error('At least one dropped file is required');
+  }
+
+  const results = [];
+  for (const file of payload.files) {
+    try {
+      const rawName = typeof file?.name === 'string' ? file.name.trim() : '';
+      const name = rawName
+        ? rawName.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+        : `dropped-${randomUUID()}.bin`;
+      if (name === '.' || name === '..') throw new Error('Dropped file name is invalid');
+      let bytes;
+      if (Array.isArray(file?.data)) {
+        if (file.data.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+          throw new Error('Dropped file data is invalid');
+        }
+        bytes = Buffer.from(file.data);
+      } else if (file?.data && typeof file.data === 'object') {
+        const values = Object.keys(file.data)
+          .filter((key) => /^\d+$/.test(key))
+          .sort((left, right) => Number(left) - Number(right))
+          .map((key) => file.data[key]);
+        if (values.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+          throw new Error('Dropped file data is invalid');
+        }
+        bytes = Buffer.from(values);
+      } else {
+        throw new Error('Dropped file data is invalid');
+      }
+
+      let destination;
+      let suffix = 0;
+      while (true) {
+        const candidateName = suffix === 0
+          ? name
+          : `${path.parse(name).name} (${suffix})${path.extname(name)}`;
+        destination = path.join(directory, candidateName);
+        try {
+          await writeFile(destination, bytes, { flag: 'wx' });
+          break;
+        } catch (error) {
+          if (error.code !== 'EEXIST') throw error;
+          suffix += 1;
+        }
+      }
+      results.push({ name, destination, success: true });
+    } catch (error) {
+      results.push({
+        name: typeof file?.name === 'string' ? file.name : '',
+        success: false,
+        error: error.message,
+      });
+    }
+  }
+  return { success: results.every((result) => result.success), results };
+}
+
 export function openWindowsSettingsCategory(payload, context = {}) {
   const platform = context.platform ?? process.platform;
   if (platform !== 'win32') {
@@ -1675,6 +1961,9 @@ export async function handleRequest(request, context) {
   if (request?.method === 'get-file-icon') {
     return getFileIcon(request.payload, context);
   }
+  if (request?.method === 'get-file-icons') {
+    return getFileIcons(request.payload, context);
+  }
   if (request?.method === 'get-user-dirs') {
     return getUserDirectories();
   }
@@ -1729,6 +2018,54 @@ export async function handleRequest(request, context) {
   }
   if (request?.method === 'rename-path') {
     return renameEntry(request.payload);
+  }
+  if (request?.method === 'open-path') {
+    return openFilePath(request.payload, context);
+  }
+  if (request?.method === 'open-with') {
+    return openFileWith(request.payload, context);
+  }
+  if (request?.method === 'drop-paths') {
+    return dropFilePaths(request.payload);
+  }
+  if (request?.method === 'write-dropped-files') {
+    return writeDroppedFiles(request.payload);
+  }
+  if (request?.method === 'reveal-path') {
+    return revealFilePath(request.payload, context);
+  }
+  if (request?.method === 'copy-files' || request?.method === 'cut-files') {
+    return setDesktopClipboard(
+      request.payload,
+      request.method === 'cut-files' ? 'cut' : 'copy',
+      context,
+    );
+  }
+  if (request?.method === 'paste-files') {
+    return pasteDesktopClipboard(request.payload, context);
+  }
+  if (request?.method === 'get-cut-paths') {
+    await getDesktopClipboard(context);
+    return [...desktopCutPaths];
+  }
+  if (request?.method === 'clear-cut') {
+    const clipboard = await getDesktopClipboard(context);
+    const platform = typeof context === 'string' ? null : context.platform ?? process.platform;
+    if (platform === 'win32' && clipboard.paths.length > 0) {
+      const result = await getWindowsNativeHost(context).request('set-file-clipboard', {
+        paths: clipboard.paths,
+        isCut: false,
+      });
+      if (result !== true) throw new Error('Could not clear the Windows cut state');
+    }
+    desktopCutPaths = [];
+    return { success: true };
+  }
+  if (request?.method === 'delete-path') {
+    const filePath = absoluteFilePath(request.payload?.path);
+    if (!path.basename(filePath)) throw new Error('Cannot delete a filesystem root');
+    await rm(filePath, { recursive: true, force: false });
+    return { success: true };
   }
   if (request?.method === 'parent-directory') {
     const directory = absoluteDirectory(request.payload);

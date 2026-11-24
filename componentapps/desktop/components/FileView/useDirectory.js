@@ -6,17 +6,20 @@ export default function useDirectory(path, desktopRoot) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const requestIdRef = useRef(0);
+  const refreshTimerRef = useRef(null);
   const pathRef = useRef(path);
   pathRef.current = path;
 
   const load = useCallback(async (targetPath) => {
+    const reqId = ++requestIdRef.current;
     if (!targetPath) {
       setFiles([]);
       setDirectoryMetadata(null);
+      setLoading(false);
+      setError(null);
       return;
     }
 
-    const reqId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
 
@@ -38,8 +41,21 @@ export default function useDirectory(path, desktopRoot) {
             { sensitivity: 'base' },
           );
         });
-        setFiles(sorted);
+        setFiles(sorted.map((file) => ({ ...file, iconUrl: null })));
         setDirectoryMetadata(res.directoryMetadata || null);
+        if (typeof api.getFileIcons === 'function' && sorted.length > 0) {
+          void api.getFileIcons(sorted.map((file) => file.iconPath || file.id))
+            .then((icons) => {
+              if (reqId !== requestIdRef.current) return;
+              setFiles((current) => current.map((file) => ({
+                ...file,
+                iconUrl: icons[file.iconPath || file.id] || null,
+              })));
+            })
+            .catch((iconError) => {
+              console.error('[desktop] could not load file icons:', iconError);
+            });
+        }
       }
     } catch (err) {
       if (reqId !== requestIdRef.current) return;
@@ -60,10 +76,15 @@ export default function useDirectory(path, desktopRoot) {
 
     const api = window.electron_desktop_API;
 
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = null;
+    }
     load(path);
     api.watchStart(path);
 
     return () => {
+      requestIdRef.current += 1;
       api.watchStop(path);
     };
   }, [path, load]);
@@ -74,12 +95,20 @@ export default function useDirectory(path, desktopRoot) {
     const off = api.on('fs:did-change', (msg) => {
       if (!msg || !msg.dir) return;
       if (msg.dir === pathRef.current) {
-        // Небольшая задержка — fs.watch иногда стреляет быстрее,
-        // чем файловая система успевает применить изменения
-        setTimeout(() => load(pathRef.current), 100);
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = setTimeout(() => {
+          refreshTimerRef.current = null;
+          load(pathRef.current);
+        }, 100);
       }
     });
-    return off;
+    return () => {
+      off();
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+    };
   }, [load]);
 
   const reload = useCallback(() => load(path), [path, load]);

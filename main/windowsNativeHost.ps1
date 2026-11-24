@@ -527,6 +527,10 @@ while ($null -ne ($line = $reader.ReadLine())) {
             'dock-reset'  { [OmniWin32]::ResetDock([long]$request.hwnd) }
             'dock-remove' { [OmniWin32]::RemoveDock([long]$request.hwnd) }
             'cursor' { [OmniWin32]::SetCursor([int]$request.x, [int]$request.y) }
+            'open-path' { [OmniWin32]::OpenPath([string]$request.path) }
+            'set-file-clipboard' { [OmniWin32]::SetFileClipboard([string[]]$request.paths, [bool]$request.isCut) }
+            'get-file-clipboard' { [OmniWin32]::GetFileClipboard() }
+            'clear-file-clipboard' { [OmniWin32]::ClearFileClipboard() }
             'focus'  { [OmniWin32]::Focus([long]$request.hwnd) }
             'minimize' { [OmniWin32]::Minimize([long]$request.hwnd) }
             'maximize' { [OmniWin32]::Maximize([long]$request.hwnd, [bool]$request.maximize) }

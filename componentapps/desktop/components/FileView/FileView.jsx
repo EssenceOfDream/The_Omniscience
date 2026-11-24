@@ -3,13 +3,12 @@ import React, {
 } from 'react';
 import {
     Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle,
-    Divider, IconButton, Breadcrumbs, Link, Menu, MenuItem, TextField,
+    IconButton, Breadcrumbs, Link, TextField,
     Typography, CircularProgress,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { motion, useMotionValue, useSpring, useTransform } from 'motion/react';
 import useDirectory from './useDirectory';
-import { useFileIcon } from './useIcons';
 import { useSetting } from '../../../../src/settings/useSettings';
 
 /* ------------------------------------------------------------------ */
@@ -120,14 +119,14 @@ function FileItem({
     file, selected, cut, onSelect, onOpen, onContextRequest,
     onDragRequest, registerRef, autoPlayVideo,
 }) {
-    const iconUrl = useFileIcon(file.iconPath || file.id);
+    const iconUrl = file.iconUrl;
     const [iconFailed, setIconFailed] = useState(false);
     const [mediaFailed, setMediaFailed] = useState(false);
 
     useEffect(() => {
         setIconFailed(false);
         setMediaFailed(false);
-    }, [file.id, file.iconPath]);
+    }, [file.id, file.iconPath, file.iconUrl]);
 
     const setRef = useCallback((el) => { registerRef(file.id, el); }, [file.id, registerRef]);
 
@@ -225,7 +224,6 @@ function FileViewInner({ basePath }) {
     const [currentPath, setCurrentPath] = useState(basePath);
     const [selectedIds, setSelectedIds] = useState(() => new Set());
     const [cutPaths, setCutPaths] = useState(() => new Set());
-    const [contextMenu, setContextMenu] = useState(null);
     const [nameDialog, setNameDialog] = useState(null);
     const [nameInput, setNameInput] = useState('');
     const [nameError, setNameError] = useState('');
@@ -334,15 +332,22 @@ function FileViewInner({ basePath }) {
             const selected = selectedIdsRef.current;
 
             if (action === 'copy' && selected.size > 0) {
-                api.copyFiles([...selected]);
+                void api.copyFiles([...selected]).then((result) => {
+                    setCutPaths(new Set(result.cutPaths || []));
+                }).catch((error) => setActionError(error?.message || String(error)));
             } else if (action === 'cut' && selected.size > 0) {
-                api.cutFiles([...selected]);
+                void api.cutFiles([...selected]).then((result) => {
+                    setCutPaths(new Set(result.cutPaths || []));
+                }).catch((error) => setActionError(error?.message || String(error)));
             } else if (action === 'paste') {
                 const dir = currentPathRef.current;
                 if (!dir) return;
                 api.pasteFiles(dir).then((res) => {
-                    if (res?.success) reloadRef.current?.();
-                });
+                    if (res?.success) {
+                        setCutPaths(new Set(res.cutPaths || []));
+                        reloadRef.current?.();
+                    } else if (res?.error) setActionError(res.error);
+                }).catch((error) => setActionError(error?.message || String(error)));
             } else if (action === 'selectAll') {
                 setSelectedIds(new Set(filesRef.current.map((f) => f.id)));
             } else if (action === 'delete' && selected.size > 0) {
@@ -417,6 +422,31 @@ function FileViewInner({ basePath }) {
     }, [handleOpenFolder]);
 
     /* --- Контекстное меню / drag-out --- */
+    const showNativeContextMenu = (kind, paths, event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const api = window.electron_desktop_API;
+        if (!api?.showContextMenu) {
+            setActionError('Нативное контекстное меню недоступно.');
+            return;
+        }
+        void api.showContextMenu({
+            kind,
+            paths,
+            directory: currentPathRef.current,
+            x: event.clientX,
+            y: event.clientY,
+            cutCount: cutPaths.size,
+        }).catch((error) => {
+            console.error('[desktop] could not show context menu:', error);
+            setActionError(error?.message || String(error));
+        });
+    };
+
+    const handleBackgroundContextMenu = (event) => {
+        showNativeContextMenu('background', [], event);
+    };
+
     const handleItemContextRequest = useCallback((file, event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -424,17 +454,13 @@ function FileViewInner({ basePath }) {
             const next = new Set([file.id]);
             selectedIdsRef.current = next;
             setSelectedIds(next);
+            showNativeContextMenu('files', [file.id], event);
+            return;
         }
-        setContextMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, file });
-    }, []);
-
-    const handleBackgroundContextMenu = (event) => {
-        event.preventDefault();
-        setContextMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, file: null });
-    };
+        showNativeContextMenu('files', [...selectedIdsRef.current], event);
+    }, [cutPaths.size]);
 
     const openNameDialog = (type, file = null) => {
-        setContextMenu(null);
         setNameDialog({ type, path: file?.id || null });
         setNameInput(type === 'rename' ? file.name : '');
         setNameError('');
@@ -486,10 +512,10 @@ function FileViewInner({ basePath }) {
         setDeleting(true);
         setDeleteError('');
         try {
-            await api.trashPath(deleteTarget.id);
+            for (const file of deleteTarget) await api.trashPath(file.id);
             setSelectedIds((previous) => {
                 const next = new Set(previous);
-                next.delete(deleteTarget.id);
+                for (const file of deleteTarget) next.delete(file.id);
                 return next;
             });
             setDeleteTarget(null);
@@ -502,12 +528,95 @@ function FileViewInner({ basePath }) {
         }
     };
 
+    useEffect(() => {
+        const api = window.electron_desktop_API;
+        if (!api?.on) return undefined;
+        return api.on('desktop-context-menu-action', async ({ action, context }) => {
+            const paths = Array.isArray(context?.paths) ? context.paths : [];
+            const targetFiles = paths
+                .map((id) => filesRef.current.find((file) => file.id === id))
+                .filter(Boolean);
+            try {
+                if (action === 'create-folder' || action === 'create-file') {
+                    openNameDialog(action === 'create-folder' ? 'folder' : 'file');
+                } else if (action === 'rename' && targetFiles.length === 1) {
+                    openNameDialog('rename', targetFiles[0]);
+                } else if (action === 'open' || action === 'open-with') {
+                    if (action === 'open-with') {
+                        if (paths.length !== 1) throw new Error('Выберите один файл для команды «Открыть с помощью».');
+                        await api.openWith(paths[0]);
+                    } else if (paths.length === 1 && targetFiles[0]?.isDir) {
+                        handleOpenFolder(paths[0]);
+                    } else {
+                        for (const path of paths) await api.openPath(path);
+                    }
+                } else if (action === 'copy-path') {
+                    await navigator.clipboard.writeText(paths.join('\n'));
+                } else if (action === 'reveal') {
+                    await api.revealPath(paths[0] || context.directory);
+                } else if (action === 'copy' || action === 'cut') {
+                    const result = await api[action === 'copy' ? 'copyFiles' : 'cutFiles'](paths);
+                    setCutPaths(new Set(result.cutPaths || []));
+                } else if (action === 'paste') {
+                    const result = await api.pasteFiles(context.directory);
+                    if (result?.success === false) throw new Error(result.error || 'Не удалось вставить файлы.');
+                    setCutPaths(new Set(result.cutPaths || []));
+                    await reload();
+                } else if (action === 'undo-cut') {
+                    await api.clearCut();
+                    setCutPaths(new Set());
+                    await reload();
+                } else if (action === 'trash') {
+                    setDeleteTarget(targetFiles);
+                    setDeleteError('');
+                } else if (action === 'delete') {
+                    const names = targetFiles.map((file) => file.name).join(', ');
+                    if (!window.confirm(`Удалить безвозвратно: ${names}? Это действие необратимо.`)) return;
+                    for (const path of paths) await api.deletePath(path);
+                    setSelectedIds(new Set());
+                    await reload();
+                } else if (action === 'refresh') {
+                    await reload();
+                }
+                setActionError('');
+            } catch (error) {
+                console.error(`[desktop] context menu action ${action} failed:`, error);
+                if (action === 'trash') setDeleteError(error?.message || String(error));
+                else setActionError(error?.message || String(error));
+            }
+        });
+    }, [handleOpenFolder, reload]);
+
+    useEffect(() => {
+        const api = window.electron_desktop_API;
+        if (!api?.on) return undefined;
+        return api.on('desktop-native-drop', async ({ paths }) => {
+            if (!Array.isArray(paths) || paths.length === 0) return;
+            setDragOver(false);
+            try {
+                const result = await api.dropPaths(paths, currentPath, false);
+                if (!result?.success) {
+                    const failed = result?.results?.find((item) => item.success === false);
+                    throw new Error(failed?.error || 'Не удалось поместить файлы в папку.');
+                }
+                setActionError('');
+                await reload();
+            } catch (error) {
+                console.error('[desktop] native file drop failed:', error);
+                setActionError(error?.message || String(error));
+            }
+        });
+    }, [currentPath, reload]);
+
     const handleItemDragRequest = useCallback((file) => {
         const api = window.electron_desktop_API;
         if (!api?.startDrag) return;
         const selected = selectedIdsRef.current;
         const paths = selected.has(file.id) ? [...selected] : [file.id];
-        api.startDrag(paths);
+        Promise.resolve(api.startDrag(paths)).catch((error) => {
+            console.error('[desktop] could not start file drag:', error);
+            setActionError(error?.message || String(error));
+        });
     }, []);
 
     /* --- Drag-in --- */
@@ -927,50 +1036,6 @@ function FileViewInner({ basePath }) {
                 )}
             </Box>
 
-            <Menu
-                open={Boolean(contextMenu)}
-                onClose={() => setContextMenu(null)}
-                anchorReference="anchorPosition"
-                anchorPosition={contextMenu
-                    ? { top: contextMenu.mouseY, left: contextMenu.mouseX }
-                    : undefined}
-            >
-                {contextMenu?.file && (
-                    <MenuItem onClick={() => {
-                        const file = contextMenu.file;
-                        setContextMenu(null);
-                        void handleOpen(file);
-                    }}>
-                        Открыть
-                    </MenuItem>
-                )}
-                <MenuItem onClick={() => openNameDialog('folder')}>Создать папку</MenuItem>
-                <MenuItem onClick={() => openNameDialog('file')}>Создать файл</MenuItem>
-                {contextMenu?.file && (
-                    <MenuItem onClick={() => openNameDialog('rename', contextMenu.file)}>
-                        Переименовать
-                    </MenuItem>
-                )}
-                {contextMenu?.file && (
-                    <MenuItem
-                        onClick={() => {
-                            setDeleteTarget(contextMenu.file);
-                            setDeleteError('');
-                            setContextMenu(null);
-                        }}
-                    >
-                        Удалить в корзину
-                    </MenuItem>
-                )}
-                <Divider />
-                <MenuItem onClick={() => {
-                    setContextMenu(null);
-                    void reload();
-                }}>
-                    Обновить
-                </MenuItem>
-            </Menu>
-
             <Dialog
                 open={Boolean(nameDialog)}
                 onClose={() => setNameDialog(null)}
@@ -1015,7 +1080,9 @@ function FileViewInner({ basePath }) {
                 <DialogTitle>Переместить в корзину?</DialogTitle>
                 <DialogContent>
                     <Typography>
-                        «{deleteTarget?.name}» можно будет восстановить из корзины.
+                        {deleteTarget?.length === 1
+                            ? `«${deleteTarget[0].name}» можно будет восстановить из корзины.`
+                            : `${deleteTarget?.length || 0} объектов можно будет восстановить из корзины.`}
                     </Typography>
                     {deleteError && (
                         <Alert severity="error" sx={{ mt: 2 }}>{deleteError}</Alert>

@@ -826,6 +826,178 @@ test('opens the browser redirect as a regular webapp', async () => {
   }
 });
 
+test('opens desktop shortcuts through the Windows shell instead of opener path scope', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-desktop-shortcut-'));
+  const shortcutPath = path.join(root, 'CODERROR.lnk');
+  const requests = [];
+  try {
+    await writeFile(shortcutPath, 'shortcut');
+    const result = await handleRequest({
+      method: 'open-path',
+      payload: { path: shortcutPath },
+    }, {
+      projectRoot: root,
+      platform: 'win32',
+      nativeWindowHost: {
+        async request(action, payload) {
+          requests.push({ action, payload });
+          return true;
+        },
+      },
+    });
+    assert.deepEqual(result, { opened: true });
+    assert.deepEqual(requests, [{
+      action: 'open-path',
+      payload: { path: shortcutPath },
+    }]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('opens the Windows Open With dialog for the selected file', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-desktop-open-with-'));
+  const filePath = path.join(root, 'sample.unknown');
+  const spawns = [];
+  try {
+    await writeFile(filePath, 'content');
+    const result = await handleRequest({
+      method: 'open-with',
+      payload: { path: filePath },
+    }, {
+      platform: 'win32',
+      projectRoot: root,
+      spawnProcess(executable, args, options) {
+        spawns.push({ executable, args, options });
+        const child = new EventEmitter();
+        child.unref = () => {};
+        process.nextTick(() => child.emit('spawn'));
+        return child;
+      },
+    });
+    assert.deepEqual(result, { opened: true });
+    assert.deepEqual(spawns, [{
+      executable: 'rundll32.exe',
+      args: ['shell32.dll,OpenAs_RunDLL', filePath],
+      options: { detached: true, stdio: 'ignore' },
+    }]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('copies, cuts, and pastes desktop files without overwriting existing entries', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-desktop-clipboard-'));
+  const source = path.join(root, 'source');
+  const destination = path.join(root, 'destination');
+  try {
+    await mkdir(source);
+    await mkdir(destination);
+    await writeFile(path.join(source, 'sample.txt'), 'copied');
+    const sourcePath = path.join(source, 'sample.txt');
+
+    await handleRequest({ method: 'copy-files', payload: { paths: [sourcePath] } }, root);
+    const copied = await handleRequest({
+      method: 'paste-files',
+      payload: { dir: destination },
+    }, root);
+    assert.equal(copied.success, true);
+    assert.equal(await readFile(path.join(destination, 'sample.txt'), 'utf8'), 'copied');
+
+    await handleRequest({ method: 'cut-files', payload: { paths: [sourcePath] } }, root);
+    assert.deepEqual(await handleRequest({ method: 'get-cut-paths' }, root), [sourcePath]);
+    const moved = await handleRequest({
+      method: 'paste-files',
+      payload: { dir: destination },
+    }, root);
+    assert.equal(moved.success, false);
+    assert.equal(moved.results[0].success, false);
+    assert.equal(await readFile(sourcePath, 'utf8'), 'copied');
+
+    await handleRequest({ method: 'clear-cut' }, root);
+    assert.deepEqual(await handleRequest({ method: 'get-cut-paths' }, root), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('uses the Windows file clipboard for desktop copy and paste', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-desktop-os-clipboard-'));
+  const source = path.join(root, 'source.txt');
+  const destination = path.join(root, 'destination');
+  const nativeRequests = [];
+  let clipboard = { paths: [], isCut: false };
+  const context = {
+    platform: 'win32',
+    projectRoot: root,
+    nativeWindowHost: {
+      async request(action, payload = {}) {
+        nativeRequests.push({ action, payload });
+        if (action === 'set-file-clipboard') {
+          clipboard = { paths: payload.paths, isCut: payload.isCut };
+          return true;
+        }
+        if (action === 'get-file-clipboard') return clipboard;
+        if (action === 'clear-file-clipboard') {
+          clipboard = { paths: [], isCut: false };
+          return true;
+        }
+        throw new Error(`Unexpected native action: ${action}`);
+      },
+    },
+  };
+  try {
+    await writeFile(source, 'clipboard');
+    await mkdir(destination);
+    await handleRequest({ method: 'cut-files', payload: { paths: [source] } }, context);
+    assert.deepEqual(clipboard, { paths: [source], isCut: true });
+    assert.deepEqual(await handleRequest({ method: 'get-cut-paths' }, context), [source]);
+
+    const result = await handleRequest({ method: 'paste-files', payload: { dir: destination } }, context);
+    assert.equal(result.success, true);
+    assert.equal(await readFile(path.join(destination, 'source.txt'), 'utf8'), 'clipboard');
+    assert.equal(clipboard.isCut, false);
+    assert.deepEqual(nativeRequests.map(({ action }) => action), [
+      'set-file-clipboard',
+      'get-file-clipboard',
+      'get-file-clipboard',
+      'clear-file-clipboard',
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('copies native dropped files and writes inline dropped files without overwriting', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-desktop-drop-'));
+  const sourceDirectory = path.join(root, 'source');
+  const destination = path.join(root, 'destination');
+  const source = path.join(sourceDirectory, 'sample.txt');
+  try {
+    await mkdir(sourceDirectory);
+    await mkdir(destination);
+    await writeFile(source, 'native');
+    const dropped = await handleRequest({
+      method: 'drop-paths',
+      payload: { paths: [source], dir: destination },
+    }, root);
+    assert.equal(dropped.success, true);
+    assert.equal(await readFile(source, 'utf8'), 'native');
+
+    const inline = await handleRequest({
+      method: 'write-dropped-files',
+      payload: {
+        dir: destination,
+        files: [{ name: 'sample.txt', data: Array.from(Buffer.from('inline')) }],
+      },
+    }, root);
+    assert.equal(inline.success, true);
+    assert.equal(await readFile(path.join(destination, 'sample (1).txt'), 'utf8'), 'inline');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('reports the Node runtime through the sidecar health request', async () => {
   const health = await handleRequest({ method: 'health' }, 'C:\\Omniscience');
   assert.equal(health.nodeVersion, process.version);
@@ -930,6 +1102,35 @@ test('returns cached Windows shell icons for desktop files and folders', async (
     assert.deepEqual(fileIcon, {
       success: true,
       fileUrl: `data:image/png;base64,${Buffer.from('sample.txt').toString('base64')}`,
+    });
+
+    test('extracts icons for a directory in one background-friendly batch', async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'omni-desktop-icon-batch-'));
+      const paths = [path.join(root, 'one.txt'), path.join(root, 'two.txt')];
+      const calls = [];
+      const context = {
+        projectRoot: root,
+        platform: 'win32',
+        async extractWindowsAppIcons(requests) {
+          calls.push(requests);
+          return new Map(requests.map((request) => [
+            request.id,
+            { dataUrl: `data:image/png;base64,${Buffer.from(path.basename(request.path)).toString('base64')}` },
+          ]));
+        },
+      };
+      try {
+        await Promise.all(paths.map((filePath) => writeFile(filePath, 'content')));
+        const icons = await handleRequest({ method: 'get-file-icons', payload: { paths } }, context);
+        assert.deepEqual(icons, Object.fromEntries(paths.map((filePath) => [
+          filePath,
+          `data:image/png;base64,${Buffer.from(path.basename(filePath)).toString('base64')}`,
+        ])));
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].length, paths.length);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     });
     assert.deepEqual(folderIcon, {
       success: true,

@@ -54,6 +54,11 @@ public static class OmniWin32
     private const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
     private const int OBJID_WINDOW = 0;
     private const int CHILDID_SELF = 0;
+    private const uint CF_HDROP = 15;
+    private const uint GMEM_MOVEABLE = 0x0002;
+    private const uint GMEM_ZEROINIT = 0x0040;
+    private const uint DROPEFFECT_COPY = 1;
+    private const uint DROPEFFECT_MOVE = 2;
     private const int VK_LBUTTON = 0x01;
     private const uint WM_QUIT = 0x0012;
     private const uint PM_NOREMOVE = 0x0000;
@@ -148,6 +153,38 @@ public static class OmniWin32
         public IntPtr lParam;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DROPFILES
+    {
+        public int pFiles;
+        public int x;
+        public int y;
+        public int fNC;
+        public int fWide;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool OpenClipboard(IntPtr owner);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool CloseClipboard();
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool EmptyClipboard();
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetClipboardData(uint format, IntPtr memory);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr GetClipboardData(uint format);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint RegisterClipboardFormat(string format);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GlobalLock(IntPtr memory);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GlobalUnlock(IntPtr memory);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GlobalFree(IntPtr memory);
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint DragQueryFile(IntPtr drop, uint index, StringBuilder path, uint pathLength);
     [StructLayout(LayoutKind.Sequential)]
     private struct ACCENT_POLICY {
         public int AccentState;
@@ -1319,6 +1356,151 @@ public static class OmniWin32
     }
 
     public static bool SetCursor(int x, int y) { return SetCursorPos(x, y); }
+
+    public static bool OpenPath(string filePath)
+    {
+        if (String.IsNullOrWhiteSpace(filePath) || !System.IO.Path.IsPathRooted(filePath))
+            throw new ArgumentException("An absolute file path is required");
+        if (!System.IO.File.Exists(filePath) && !System.IO.Directory.Exists(filePath))
+            throw new System.IO.FileNotFoundException("The selected file or directory no longer exists", filePath);
+        return ShellExecute(IntPtr.Zero, "open", filePath, null, null, 1).ToInt64() > 32;
+    }
+
+    public static bool SetFileClipboard(string[] paths, bool isCut)
+    {
+        if (paths == null || paths.Length == 0)
+            throw new ArgumentException("At least one file path is required");
+        foreach (string filePath in paths) {
+            if (String.IsNullOrWhiteSpace(filePath) || !System.IO.Path.IsPathRooted(filePath))
+                throw new ArgumentException("An absolute file path is required");
+            if (!System.IO.File.Exists(filePath) && !System.IO.Directory.Exists(filePath))
+                throw new System.IO.FileNotFoundException("A clipboard file no longer exists", filePath);
+        }
+
+        bool opened = false;
+        for (int attempt = 0; attempt < 20 && !opened; attempt++) {
+            opened = OpenClipboard(IntPtr.Zero);
+            if (!opened) Thread.Sleep(25);
+        }
+        if (!opened) throw new InvalidOperationException("The Windows clipboard is busy");
+
+        try {
+            if (!EmptyClipboard())
+                throw new InvalidOperationException("Could not clear the Windows clipboard");
+
+            uint effectFormat = RegisterClipboardFormat("Preferred DropEffect");
+            if (effectFormat == 0)
+                throw new InvalidOperationException("Could not register the Windows file clipboard format");
+            IntPtr effectMemory = AllocateGlobalMemory(BitConverter.GetBytes(isCut ? DROPEFFECT_MOVE : DROPEFFECT_COPY));
+            if (SetClipboardData(effectFormat, effectMemory) == IntPtr.Zero) {
+                GlobalFree(effectMemory);
+                throw new InvalidOperationException("Could not set the Windows file clipboard effect");
+            }
+
+            DROPFILES dropFiles = new DROPFILES {
+                pFiles = Marshal.SizeOf(typeof(DROPFILES)),
+                fWide = 1,
+            };
+            byte[] pathsBytes = Encoding.Unicode.GetBytes(String.Join("\0", paths) + "\0\0");
+            IntPtr fileMemory = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT,
+                (UIntPtr)(dropFiles.pFiles + pathsBytes.Length));
+            if (fileMemory == IntPtr.Zero)
+                throw new InvalidOperationException("Could not allocate Windows file clipboard data");
+            IntPtr filePointer = GlobalLock(fileMemory);
+            if (filePointer == IntPtr.Zero) {
+                GlobalFree(fileMemory);
+                throw new InvalidOperationException("Could not lock Windows file clipboard data");
+            }
+            try {
+                Marshal.StructureToPtr(dropFiles, filePointer, false);
+                Marshal.Copy(pathsBytes, 0, IntPtr.Add(filePointer, dropFiles.pFiles), pathsBytes.Length);
+            } finally {
+                GlobalUnlock(fileMemory);
+            }
+            if (SetClipboardData(CF_HDROP, fileMemory) == IntPtr.Zero) {
+                GlobalFree(fileMemory);
+                throw new InvalidOperationException("Could not set Windows file clipboard data");
+            }
+            return true;
+        } finally {
+            CloseClipboard();
+        }
+    }
+
+    public static object GetFileClipboard()
+    {
+        bool opened = false;
+        for (int attempt = 0; attempt < 20 && !opened; attempt++) {
+            opened = OpenClipboard(IntPtr.Zero);
+            if (!opened) Thread.Sleep(25);
+        }
+        if (!opened) throw new InvalidOperationException("The Windows clipboard is busy");
+
+        try {
+            List<string> paths = new List<string>();
+            IntPtr fileDrop = GetClipboardData(CF_HDROP);
+            if (fileDrop != IntPtr.Zero) {
+                uint count = DragQueryFile(fileDrop, UInt32.MaxValue, null, 0);
+                for (uint index = 0; index < count; index++) {
+                    uint length = DragQueryFile(fileDrop, index, null, 0);
+                    StringBuilder path = new StringBuilder((int)length + 1);
+                    if (DragQueryFile(fileDrop, index, path, (uint)path.Capacity) > 0) {
+                        paths.Add(path.ToString());
+                    }
+                }
+            }
+
+            bool isCut = false;
+            uint effectFormat = RegisterClipboardFormat("Preferred DropEffect");
+            IntPtr effectMemory = effectFormat == 0 ? IntPtr.Zero : GetClipboardData(effectFormat);
+            if (effectMemory != IntPtr.Zero) {
+                IntPtr effectPointer = GlobalLock(effectMemory);
+                if (effectPointer != IntPtr.Zero) {
+                    try {
+                        isCut = Marshal.ReadInt32(effectPointer) == DROPEFFECT_MOVE;
+                    } finally {
+                        GlobalUnlock(effectMemory);
+                    }
+                }
+            }
+            return new { paths = paths, isCut = isCut };
+        } finally {
+            CloseClipboard();
+        }
+    }
+
+    public static bool ClearFileClipboard()
+    {
+        bool opened = false;
+        for (int attempt = 0; attempt < 20 && !opened; attempt++) {
+            opened = OpenClipboard(IntPtr.Zero);
+            if (!opened) Thread.Sleep(25);
+        }
+        if (!opened) throw new InvalidOperationException("The Windows clipboard is busy");
+        try {
+            return EmptyClipboard();
+        } finally {
+            CloseClipboard();
+        }
+    }
+
+    private static IntPtr AllocateGlobalMemory(byte[] bytes)
+    {
+        IntPtr memory = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, (UIntPtr)bytes.Length);
+        if (memory == IntPtr.Zero)
+            throw new InvalidOperationException("Could not allocate Windows clipboard data");
+        IntPtr pointer = GlobalLock(memory);
+        if (pointer == IntPtr.Zero) {
+            GlobalFree(memory);
+            throw new InvalidOperationException("Could not lock Windows clipboard data");
+        }
+        try {
+            Marshal.Copy(bytes, 0, pointer, bytes.Length);
+        } finally {
+            GlobalUnlock(memory);
+        }
+        return memory;
+    }
 
     public static bool Focus(long hwnd)
     {

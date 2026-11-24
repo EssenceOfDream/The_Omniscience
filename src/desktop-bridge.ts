@@ -1,4 +1,3 @@
-import { openPath } from '@tauri-apps/plugin-opener';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { nodeRequest } from './tauri';
@@ -31,8 +30,27 @@ declare global {
         directoryMetadata: Record<string, unknown> | null;
         error?: string;
       }>;
-      openPath: (path: string) => Promise<void>;
+      openPath: (path: string) => Promise<unknown>;
+      openWith: (path: string) => Promise<unknown>;
+      revealPath: (path: string) => Promise<unknown>;
+      copyFiles: (paths: string[]) => Promise<unknown>;
+      cutFiles: (paths: string[]) => Promise<unknown>;
+      pasteFiles: (directory: string) => Promise<unknown>;
+      dropPaths: (paths: string[], directory: string, isMove?: boolean) => Promise<{
+        success: boolean;
+        results: Array<Record<string, unknown>>;
+      }>;
+      writeDroppedFiles: (files: Array<{ name: string; data: Uint8Array }>, directory: string) => Promise<{
+        success: boolean;
+        results: Array<Record<string, unknown>>;
+      }>;
+      startDrag: (paths: string[]) => Promise<unknown>;
+      getCutPaths: () => Promise<string[]>;
+      clearCut: () => Promise<unknown>;
+      deletePath: (path: string) => Promise<unknown>;
+      showContextMenu: (options: Record<string, unknown>) => Promise<unknown>;
       getFileIcon: (path: string) => Promise<{ success: boolean; fileUrl: string | null }>;
+      getFileIcons: (paths: string[]) => Promise<Record<string, string | null>>;
       watchStart: (path: string) => void;
       watchStop: (path: string) => void;
       createFolder: (directory: string, name: string) => Promise<unknown>;
@@ -48,7 +66,13 @@ declare global {
 }
 
 const listeners = new Map<string, Set<(payload: unknown) => void>>();
-const watchedDirectories = new Map<string, number>();
+type DirectoryWatch = {
+  timer: number;
+  snapshot: string | null;
+  pending: boolean;
+  lastError: string | null;
+};
+const watchedDirectories = new Map<string, DirectoryWatch>();
 
 function on(channel: string, listener: (...args: unknown[]) => void) {
   const set = listeners.get(channel) || new Set();
@@ -59,6 +83,38 @@ function on(channel: string, listener: (...args: unknown[]) => void) {
 
 function emit(channel: string, payload: unknown) {
   for (const listener of listeners.get(channel) || []) listener(payload);
+}
+
+async function pollDirectory(path: string, watch: DirectoryWatch) {
+  if (watch.pending || watchedDirectories.get(path) !== watch) return;
+  watch.pending = true;
+
+  try {
+    const result = await nodeRequest<DirectoryResult>('list-directory', { path });
+    if (watchedDirectories.get(path) !== watch) return;
+
+    const snapshot = JSON.stringify(result.entries.map((entry) => [
+      entry.name,
+      entry.path,
+      entry.kind,
+      entry.size,
+      entry.modifiedAt,
+    ]));
+    if (watch.snapshot !== null && snapshot !== watch.snapshot) {
+      emit('fs:did-change', { dir: path });
+    }
+    watch.snapshot = snapshot;
+    watch.lastError = null;
+  } catch (error) {
+    if (watchedDirectories.get(path) !== watch) return;
+    const message = error instanceof Error ? error.message : String(error);
+    if (watch.lastError !== message) {
+      console.error(`[desktop] could not monitor directory ${path}:`, error);
+      watch.lastError = message;
+    }
+  } finally {
+    watch.pending = false;
+  }
 }
 
 export function installDesktopBridge() {
@@ -98,23 +154,52 @@ export function installDesktopBridge() {
         };
       }
     },
-    openPath: async (path: string) => {
-      await openPath(path);
+    openPath: (path: string) => nodeRequest('open-path', { path }),
+    openWith: (path: string) => nodeRequest('open-with', { path }),
+    revealPath: (path: string) => nodeRequest('reveal-path', { path }),
+    copyFiles: (paths: string[]) => nodeRequest('copy-files', { paths }),
+    cutFiles: (paths: string[]) => nodeRequest('cut-files', { paths }),
+    pasteFiles: (directory: string) => nodeRequest('paste-files', { dir: directory }),
+    dropPaths: (paths: string[], directory: string, isMove = false) =>
+      nodeRequest<{ success: boolean; results: Array<Record<string, unknown>> }>(
+        'drop-paths',
+        { paths, dir: directory, isMove },
+      ),
+    writeDroppedFiles: (files: Array<{ name: string; data: Uint8Array }>, directory: string) =>
+      nodeRequest<{ success: boolean; results: Array<Record<string, unknown>> }>(
+        'write-dropped-files',
+        { files, dir: directory },
+      ),
+    startDrag: (paths: string[]) => invoke('start_file_drag', { paths }),
+    getCutPaths: () => nodeRequest<string[]>('get-cut-paths'),
+    clearCut: () => nodeRequest('clear-cut'),
+    deletePath: (path: string) => nodeRequest('delete-path', { path }),
+    showContextMenu: (options: Record<string, unknown>) =>
+      invoke('show_desktop_context_menu', options),
+    getFileIcon: async (path: string) => {
+      const icons = await invoke<Record<string, string | null>>('get_file_icons', { paths: [path] });
+      const fileUrl = icons[path] || null;
+      return { success: Boolean(fileUrl), fileUrl };
     },
-    getFileIcon: (path: string) =>
-      nodeRequest<{ success: boolean; fileUrl: string | null }>('get-file-icon', { path }),
+    getFileIcons: (paths: string[]) =>
+      invoke<Record<string, string | null>>('get_file_icons', { paths }),
     watchStart: (path: string) => {
       if (watchedDirectories.has(path)) return;
-      const timer = window.setInterval(() => {
-        void nodeRequest<DirectoryResult>('list-directory', { path })
-          .then(() => emit('fs:did-change', { dir: path }))
-          .catch(() => undefined);
+      const watch: DirectoryWatch = {
+        timer: 0,
+        snapshot: null,
+        pending: false,
+        lastError: null,
+      };
+      watchedDirectories.set(path, watch);
+      void pollDirectory(path, watch);
+      watch.timer = window.setInterval(() => {
+        void pollDirectory(path, watch);
       }, 1500);
-      watchedDirectories.set(path, timer);
     },
     watchStop: (path: string) => {
-      const timer = watchedDirectories.get(path);
-      if (timer) window.clearInterval(timer);
+      const watch = watchedDirectories.get(path);
+      if (watch) window.clearInterval(watch.timer);
       watchedDirectories.delete(path);
     },
     createFolder: (directory: string, name: string) =>
@@ -149,6 +234,14 @@ export function installDesktopBridge() {
       bridge.platform = health.platform;
     })
     .catch((error) => console.error('[desktop] could not load platform:', error));
+
+  void listen<{ action: string; context: Record<string, unknown> }>(
+    'desktop-context-menu-action',
+    ({ payload }) => emit('desktop-context-menu-action', payload),
+  ).catch((error) => console.error('[desktop] context menu event listener failed:', error));
+  void listen<{ paths?: string[] }>('tauri://drag-drop', ({ payload }) => {
+    emit('desktop-native-drop', payload);
+  }).catch((error) => console.error('[desktop] file drop listener failed:', error));
 
   window.electron_desktop_API = bridge;
   window.electron_mainWindow_API = {
