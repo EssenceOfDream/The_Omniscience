@@ -1,7 +1,7 @@
 {
-  "name": "tauri-preview",
+  "name": "The_Omniscience",
   "private": true,
-  "version": "0.1.0",
+  "version": "13.0.0",
   "type": "module",
   "scripts": {
     "start": "npm run tauri -- dev",
