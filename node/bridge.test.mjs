@@ -1301,7 +1301,7 @@ test('lists and controls visible native app windows for the window controls', as
   );
 });
 
-test('prepares hidden native-window drags at their matching cursor positions', async () => {
+test('does not prepare drags for native windows hidden from the panel', async () => {
   const requests = [];
   const context = {
     projectRoot: 'C:\\Omniscience',
@@ -1338,12 +1338,53 @@ test('prepares hidden native-window drags at their matching cursor positions', a
     method: 'prepare-native-window-drag',
     payload: { id: '301', mode: 'resize', direction: 'se' },
   }, context);
+  assert.deepEqual(drag, { ok: false, abort: true });
+  assert.deepEqual(requests, [{ action: 'list', payload: { ownPid: process.pid } }]);
+});
+
+test('prepares drags for visible native windows at their matching cursor positions', async () => {
+  const requests = [];
+  const context = {
+    projectRoot: 'C:\\Omniscience',
+    platform: 'win32',
+    nativeWindowHost: {
+      async request(action, payload) {
+        requests.push({ action, payload });
+        if (action === 'list') {
+          return [{
+            id: '302',
+            title: 'Visible app',
+            visible: true,
+            taskbarHidden: false,
+            focused: false,
+          }];
+        }
+        if (action === 'prepare-drag') {
+          return {
+            x: 100,
+            y: 120,
+            width: 800,
+            height: 600,
+            cursorX: 899,
+            cursorY: 719,
+            nativeDrag: true,
+          };
+        }
+        return true;
+      },
+    },
+  };
+
+  const drag = await handleRequest({
+    method: 'prepare-native-window-drag',
+    payload: { id: '302', mode: 'resize', direction: 'se' },
+  }, context);
   assert.equal(drag.ok, true);
   assert.deepEqual(drag.cursor, { x: 899, y: 719 });
   assert.equal(drag.nativeDrag, true);
   assert.deepEqual(requests.at(-1), {
     action: 'prepare-drag',
-    payload: { hwnd: '301', mode: 'resize', direction: 'se' },
+    payload: { hwnd: '302', mode: 'resize', direction: 'se' },
   });
 
   await handleRequest({

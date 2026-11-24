@@ -19,8 +19,16 @@ type HiddenWindow = {
   focused: boolean;
 };
 
+type NativeWindow = HiddenWindow & {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 type TopbarState = {
   windows: ManagedWindow[];
+  nativeWindows: ManagedWindow[];
   hiddenWindows: ManagedWindow[];
   activeWindow: ManagedWindow | null;
   apps: unknown[];
@@ -67,10 +75,10 @@ async function getTopbarState(): Promise<TopbarState> {
     processName: item.title,
     icon: item.icon || null,
   }));
-  const nativeWindows = platform === 'win32'
+  const hiddenNativeWindows = platform === 'win32'
     ? await nodeRequest<HiddenWindow[]>('list-hidden-windows')
     : [];
-  const hiddenWindows: ManagedWindow[] = nativeWindows.map((item) => ({
+  const hiddenWindows: ManagedWindow[] = hiddenNativeWindows.map((item) => ({
     id: item.id,
     label: item.id,
     kind: 'native',
@@ -86,13 +94,32 @@ async function getTopbarState(): Promise<TopbarState> {
     isHidden: true,
     icon: item.icon,
   }));
+  const visibleNativeWindows = platform === 'win32'
+    ? await nodeRequest<NativeWindow[]>('list-native-windows')
+    : [];
+  const nativeWindows: ManagedWindow[] = visibleNativeWindows.map((item) => ({
+    id: item.id,
+    label: item.id,
+    kind: 'native',
+    title: item.title,
+    processName: item.processName || item.title,
+    minimized: item.minimized,
+    maximized: item.maximized,
+    focused: item.focused,
+    x: item.x ?? 0,
+    y: item.y ?? 0,
+    width: item.width ?? 0,
+    height: item.height ?? 0,
+    icon: item.icon,
+  }));
 
   return {
     windows,
+    nativeWindows,
     hiddenWindows,
-    activeWindow: [...windows, ...hiddenWindows].find((item) => item.focused)
+    activeWindow: [...windows, ...nativeWindows].find((item) => item.focused)
       || windows.find((item) => !item.minimized)
-      || hiddenWindows[0]
+      || nativeWindows.find((item) => !item.minimized)
       || null,
     apps: [
       ...baseApps.map((item) => ({
@@ -147,10 +174,13 @@ function getWindowLabel(payload: Record<string, unknown> = {}) {
 async function getWindowAction(payload: Record<string, unknown>, action: string) {
   const id = getWindowLabel(payload);
   if (!id) throw new Error('A window id is required');
-  const isNative = payload.kind === 'native'
+  const hidden = payload.isHidden === true
     || lastState?.hiddenWindows.some((item) => item.id === id);
+  const isNative = payload.kind === 'native'
+    || lastState?.nativeWindows.some((item) => item.id === id)
+    || hidden;
   if (isNative) {
-    return nodeRequest('manage-hidden-window', { id, action });
+    return nodeRequest(hidden ? 'manage-hidden-window' : 'manage-native-window', { id, action });
   }
   return invoke('manage_program_window', { label: id, action });
 }
@@ -224,6 +254,10 @@ async function dispatch(channel: string, payload: Record<string, unknown> = {}) 
   }
 
   switch (channel) {
+    case 'topbar:set-controls-cross-mode':
+      return invoke('set_controls_cross_mode', {
+        crossMode: payload.crossMode === true,
+      });
     case 'topbar:toggle-overview':
       return invoke('toggle_overview');
     case 'topbar:open-overview':

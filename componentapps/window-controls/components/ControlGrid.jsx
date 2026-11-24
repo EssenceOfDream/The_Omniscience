@@ -7,7 +7,6 @@ import {
 } from './windowActionRouting';
 
 import DesktopWindowsIcon from '@mui/icons-material/DesktopWindows';
-import SearchIcon from '@mui/icons-material/Search';
 import BuildIcon from '@mui/icons-material/Build';
 import NorthWestIcon from '@mui/icons-material/NorthWest';
 import NorthIcon from '@mui/icons-material/North';
@@ -22,6 +21,8 @@ import CropSquareIcon from '@mui/icons-material/CropSquare';
 import FilterNoneIcon from '@mui/icons-material/FilterNone';
 import MinimizeIcon from '@mui/icons-material/Minimize';
 import CloseIcon from '@mui/icons-material/Close';
+import GridViewIcon from '@mui/icons-material/GridView';
+import ViewWeekIcon from '@mui/icons-material/ViewWeek';
 
 const CELL = 20;
 const GAP = 1;
@@ -93,7 +94,7 @@ function Cell({ children, cursor, onClick, onMouseDown, title, disabled, col, ro
   );
 }
 
-export default function ControlGrid({ activeWindow, onOpenWindowSettings }) {
+export default function ControlGrid({ activeWindow, crossMode, onToggleMode, onOpenWindowSettings }) {
   const iconSize = 14;
   const awRef = useRef(activeWindow);
   awRef.current = activeWindow;
@@ -273,79 +274,112 @@ export default function ControlGrid({ activeWindow, onOpenWindowSettings }) {
     });
   }, []);
 
+  const modeToggle = (
+    <Cell col={1} row={crossMode ? 3 : 1}
+      title={crossMode ? 'Переключить на стандартную панель' : 'Переключить на крестовину'}
+      onClick={onToggleMode}>
+      {crossMode
+        ? <ViewWeekIcon style={{ fontSize: iconSize }} />
+        : <GridViewIcon style={{ fontSize: iconSize }} />}
+    </Cell>
+  );
+  const settingsButton = (
+    <Cell col={crossMode ? 1 : 2} row={crossMode ? 2 : 1}
+      title="Настройки окна"
+      disabled={!hasWin} onClick={() => onOpenWindowSettings?.(activeWindow?.id)}>
+      <BuildIcon style={{ fontSize: iconSize }} />
+    </Cell>
+  );
+  const maximizeButton = (
+    <Cell col={crossMode ? 5 : 3} row={1} disabled={!hasWin} onClick={maximizeWin}
+      title={isMaximized ? 'Восстановить' : 'На весь экран'}>
+      {isMaximized
+        ? <FilterNoneIcon style={{ fontSize: iconSize }} />
+        : <CropSquareIcon style={{ fontSize: iconSize }} />}
+    </Cell>
+  );
+  const minimizeButton = (
+    <Cell col={crossMode ? 5 : 4} row={crossMode ? 2 : 1}
+      disabled={!hasWin} onClick={minimizeWin} title="Свернуть">
+      <MinimizeIcon style={{ fontSize: iconSize }} />
+    </Cell>
+  );
+  const closeButton = (
+    <Cell col={crossMode ? 5 : 5} row={crossMode ? 3 : 1}
+      disabled={!hasWin} onClick={closeWin} title="Закрыть окно">
+      <CloseIcon style={{ fontSize: iconSize }} />
+    </Cell>
+  );
+
   return (
     <div style={{
       display: 'grid',
       gridTemplateColumns: `repeat(5, ${CELL}px)`,
-      gridTemplateRows: `repeat(3, ${CELL}px)`,
+      gridTemplateRows: crossMode ? `repeat(3, ${CELL}px)` : `${CELL}px`,
       gap: GAP,
     }}>
-      <Cell col={1} row={1} title={activeWindow?.title || 'Нет активного окна'} disabled={!hasWin}>
-        {activeWindow?.icon
-          ? <img src={activeWindow.icon} width={iconSize} height={iconSize} alt="" draggable={false} />
-          : <DesktopWindowsIcon style={{ fontSize: iconSize }} />}
-      </Cell>
+      {crossMode ? (
+        <>
+          <Cell col={1} row={1} title={activeWindow?.title || 'Нет активного окна'} disabled={!hasWin}>
+            {activeWindow?.icon
+              ? <img src={activeWindow.icon} width={iconSize} height={iconSize} alt="" draggable={false} />
+              : <DesktopWindowsIcon style={{ fontSize: iconSize }} />}
+          </Cell>
+          {settingsButton}
+          {modeToggle}
+        </>
+      ) : (
+        <>
+          {modeToggle}
+          {settingsButton}
+        </>
+      )}
 
-      <Cell col={1} row={2} title="Поиск" disabled={!hasWin} onClick={() => { }}>
-        <SearchIcon style={{ fontSize: iconSize }} />
-      </Cell>
+      {crossMode && (
+        <>
+          <Cell col={2} row={1} cursor={CURSORS.nw} disabled={!canResize}
+            onMouseDown={beginDrag('resize', 'nw')} title="↖">
+            <NorthWestIcon style={{ fontSize: iconSize }} />
+          </Cell>
+          <Cell col={2} row={2} cursor={CURSORS.w} disabled={!canResize}
+            onMouseDown={beginDrag('resize', 'w')} title="←">
+            <WestIcon style={{ fontSize: iconSize }} />
+          </Cell>
+          <Cell col={2} row={3} cursor={CURSORS.sw} disabled={!canResize}
+            onMouseDown={beginDrag('resize', 'sw')} title="↙">
+            <SouthWestIcon style={{ fontSize: iconSize }} />
+          </Cell>
 
-      <Cell col={1} row={3} title="Настройки окна"
-        disabled={!hasWin} onClick={() => onOpenWindowSettings?.(activeWindow?.id)}>
-        <BuildIcon style={{ fontSize: iconSize }} />
-      </Cell>
+          <Cell col={3} row={1} cursor={CURSORS.n} disabled={!canResize}
+            onMouseDown={beginDrag('resize', 'n')} title="↑">
+            <NorthIcon style={{ fontSize: iconSize }} />
+          </Cell>
+          <Cell col={3} row={2} cursor="move" disabled={!canResize}
+            onMouseDown={beginDrag('move', null)} title="Переместить окно">
+            <OpenWithIcon style={{ fontSize: Math.round(iconSize * 1.2) }} />
+          </Cell>
+          <Cell col={3} row={3} cursor={CURSORS.s} disabled={!canResize}
+            onMouseDown={beginDrag('resize', 's')} title="↓">
+            <SouthIcon style={{ fontSize: iconSize }} />
+          </Cell>
 
-      <Cell col={2} row={1} cursor={CURSORS.nw} disabled={!canResize}
-        onMouseDown={beginDrag('resize', 'nw')} title="↖">
-        <NorthWestIcon style={{ fontSize: iconSize }} />
-      </Cell>
-      <Cell col={2} row={2} cursor={CURSORS.w} disabled={!canResize}
-        onMouseDown={beginDrag('resize', 'w')} title="←">
-        <WestIcon style={{ fontSize: iconSize }} />
-      </Cell>
-      <Cell col={2} row={3} cursor={CURSORS.sw} disabled={!canResize}
-        onMouseDown={beginDrag('resize', 'sw')} title="↙">
-        <SouthWestIcon style={{ fontSize: iconSize }} />
-      </Cell>
-
-      <Cell col={3} row={1} cursor={CURSORS.n} disabled={!canResize}
-        onMouseDown={beginDrag('resize', 'n')} title="↑">
-        <NorthIcon style={{ fontSize: iconSize }} />
-      </Cell>
-      <Cell col={3} row={2} cursor="move" disabled={!canResize}
-        onMouseDown={beginDrag('move', null)} title="Переместить окно">
-        <OpenWithIcon style={{ fontSize: Math.round(iconSize * 1.2) }} />
-      </Cell>
-      <Cell col={3} row={3} cursor={CURSORS.s} disabled={!canResize}
-        onMouseDown={beginDrag('resize', 's')} title="↓">
-        <SouthIcon style={{ fontSize: iconSize }} />
-      </Cell>
-
-      <Cell col={4} row={1} cursor={CURSORS.ne} disabled={!canResize}
-        onMouseDown={beginDrag('resize', 'ne')} title="↗">
-        <NorthEastIcon style={{ fontSize: iconSize }} />
-      </Cell>
-      <Cell col={4} row={2} cursor={CURSORS.e} disabled={!canResize}
-        onMouseDown={beginDrag('resize', 'e')} title="→">
-        <EastIcon style={{ fontSize: iconSize }} />
-      </Cell>
-      <Cell col={4} row={3} cursor={CURSORS.se} disabled={!canResize}
-        onMouseDown={beginDrag('resize', 'se')} title="↘">
-        <SouthEastIcon style={{ fontSize: iconSize }} />
-      </Cell>
-
-      <Cell col={5} row={1} disabled={!hasWin} onClick={maximizeWin}
-        title={isMaximized ? 'Восстановить' : 'На весь экран'}>
-        {isMaximized
-          ? <FilterNoneIcon style={{ fontSize: iconSize }} />
-          : <CropSquareIcon style={{ fontSize: iconSize }} />}
-      </Cell>
-      <Cell col={5} row={2} disabled={!hasWin} onClick={minimizeWin} title="Свернуть">
-        <MinimizeIcon style={{ fontSize: iconSize }} />
-      </Cell>
-      <Cell col={5} row={3} disabled={!hasWin} onClick={closeWin} title="Закрыть окно">
-        <CloseIcon style={{ fontSize: iconSize }} />
-      </Cell>
+          <Cell col={4} row={1} cursor={CURSORS.ne} disabled={!canResize}
+            onMouseDown={beginDrag('resize', 'ne')} title="↗">
+            <NorthEastIcon style={{ fontSize: iconSize }} />
+          </Cell>
+          <Cell col={4} row={2} cursor={CURSORS.e} disabled={!canResize}
+            onMouseDown={beginDrag('resize', 'e')} title="→">
+            <EastIcon style={{ fontSize: iconSize }} />
+          </Cell>
+          <Cell col={4} row={3} cursor={CURSORS.se} disabled={!canResize}
+            onMouseDown={beginDrag('resize', 'se')} title="↘">
+            <SouthEastIcon style={{ fontSize: iconSize }} />
+          </Cell>
+        </>
+      )}
+      {maximizeButton}
+      {minimizeButton}
+      {closeButton}
     </div>
   );
 }

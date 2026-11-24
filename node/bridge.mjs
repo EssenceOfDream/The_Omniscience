@@ -1057,7 +1057,7 @@ async function prepareNativeWindowDrag(payload, context) {
     throw new Error('Unsupported native-window resize direction');
   }
 
-  const windows = await listHiddenWindows(context);
+  const windows = await listNativeWindows(context);
   if (!windows.some((window) => window.id === id)) {
     return { ok: false, abort: true };
   }

@@ -107,6 +107,8 @@ struct WorkspaceGeometry {
     taskbar_height: f64,
 }
 
+struct ControlsCrossMode(Mutex<bool>);
+
 fn start_node_bridge() -> Result<NodeRuntime, String> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let project_root = manifest_dir
@@ -277,6 +279,23 @@ fn calculate_workspace_geometry(screen: WindowBounds, taskbar_height: f64) -> Wo
     }
 }
 
+fn controls_bounds(geometry: WorkspaceGeometry, cross_mode: bool) -> WindowBounds {
+    if cross_mode {
+        geometry.controls
+    } else {
+        WindowBounds {
+            x: geometry.controls.x,
+            y: if cfg!(target_os = "windows") {
+                geometry.panel.y
+            } else {
+                geometry.controls.y
+            },
+            width: geometry.controls.width,
+            height: geometry.panel.height,
+        }
+    }
+}
+
 fn apply_window_bounds(
     window: &WebviewWindow,
     bounds: WindowBounds,
@@ -443,6 +462,11 @@ fn force_workspace_positions(
     let controls = app
         .get_webview_window("controls")
         .ok_or_else(|| "The window controls were not created".to_string())?;
+    let controls_cross_mode = app.state::<ControlsCrossMode>();
+    let cross_mode = controls_cross_mode
+        .0
+        .lock()
+        .map_err(|_| "Window controls state lock is unavailable".to_string())?;
     let mut errors = Vec::new();
 
     if let Err(error) = apply_window_bounds(&desktop, geometry.screen, "desktop") {
@@ -461,7 +485,11 @@ fn force_workspace_positions(
             "Could not keep the workspace panel on top: {error}"
         ));
     }
-    if let Err(error) = apply_window_bounds(&controls, geometry.controls, "window controls") {
+    if let Err(error) = apply_window_bounds(
+        &controls,
+        controls_bounds(geometry, *cross_mode),
+        "window controls",
+    ) {
         errors.push(error);
     }
     if let Err(error) = controls.set_always_on_top(true) {
@@ -595,6 +623,7 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
             .build()
             .map_err(|error| format!("Could not create the workspace panel: {error}"))?;
 
+    let initial_controls_bounds = controls_bounds(geometry, false);
     let controls = WebviewWindowBuilder::new(
         app,
         "controls",
@@ -602,8 +631,11 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
     )
     .title("Omniscience window controls")
     .devtools(true)
-    .position(geometry.controls.x, geometry.controls.y)
-    .inner_size(geometry.controls.width, geometry.controls.height)
+    .position(initial_controls_bounds.x, initial_controls_bounds.y)
+    .inner_size(
+        initial_controls_bounds.width,
+        initial_controls_bounds.height,
+    )
     .decorations(false)
     .resizable(false)
     .minimizable(false)
@@ -1817,6 +1849,7 @@ pub fn run() {
                 request_node(&mut runtime, "get-theme", json!({})).map_err(std::io::Error::other)?
             };
             app.manage(ThemeSettingsState(Mutex::new(theme_settings)));
+            app.manage(ControlsCrossMode(Mutex::new(false)));
             let geometry = configure_workspace_windows(app).map_err(std::io::Error::other)?;
             app.manage(geometry);
             Ok(())
@@ -1846,6 +1879,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             node_request,
+            set_controls_cross_mode,
             start_file_drag,
             get_file_icons,
             trash_path,
@@ -1876,6 +1910,29 @@ pub fn run() {
             start_workspace_position_watchdog(app.clone(), geometry.taskbar_height);
         }
     });
+}
+
+#[tauri::command]
+fn set_controls_cross_mode(
+    app: AppHandle,
+    geometry: State<'_, WorkspaceGeometry>,
+    controls_cross_mode: State<'_, ControlsCrossMode>,
+    cross_mode: bool,
+) -> Result<(), String> {
+    let mut current = controls_cross_mode
+        .0
+        .lock()
+        .map_err(|_| "Window controls state lock is unavailable".to_string())?;
+    let window = app
+        .get_webview_window("controls")
+        .ok_or_else(|| "The window controls were not created".to_string())?;
+    apply_window_bounds(
+        &window,
+        controls_bounds(*geometry, cross_mode),
+        "window controls",
+    )?;
+    *current = cross_mode;
+    Ok(())
 }
 
 #[tauri::command]

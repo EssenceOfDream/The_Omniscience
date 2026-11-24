@@ -4,6 +4,19 @@ import ControlGrid from './ControlGrid';
 
 export default function ControlWindowContainer() {
   const [activeWindow, setActiveWindow] = useState(null);
+  const [crossMode, setCrossMode] = useState(false);
+
+  const setControlsMode = (nextCrossMode) => {
+    if (crossMode === nextCrossMode) return;
+    setCrossMode(nextCrossMode);
+
+    const invoke = window.electron_topbar_API?.invoke;
+    if (!invoke) return;
+    invoke('topbar:set-controls-cross-mode', { crossMode: nextCrossMode }).catch((error) => {
+      console.error('[control-window] failed to change controls mode:', error);
+      setCrossMode(!nextCrossMode);
+    });
+  };
 
   useEffect(() => {
     const api = window.electron_topbar_API;
@@ -33,6 +46,8 @@ export default function ControlWindowContainer() {
     }}>
       <ControlGrid
         activeWindow={activeWindow}
+        crossMode={crossMode}
+        onToggleMode={() => setControlsMode(!crossMode)}
         onOpenWindowSettings={(id) => {
           window.electron_topbar_API?.send('topbar:open-window-settings', { id });
         }}
