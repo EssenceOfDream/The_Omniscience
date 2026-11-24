@@ -13,7 +13,9 @@ use std::{
 };
 use tauri::{
     AppHandle, Emitter, LogicalPosition, Manager, RunEvent, State, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder, WindowEvent, menu::{MenuBuilder, MenuItemBuilder},
+    WebviewWindowBuilder, WindowEvent,
+    menu::{MenuBuilder, MenuItemBuilder},
+    utils::config::WindowEffectsConfig,
 };
 
 #[cfg(target_os = "windows")]
@@ -25,6 +27,15 @@ const WINDOW_CONTROLS_HEIGHT: f64 = 62.0;
 const WINDOW_CONTROLS_BOTTOM_PADDING: f64 = 0.0;
 const THEME_BASE_CSS: &str = include_str!("../../extensions/omni-theme/base.css");
 const THEME_CONTENT_JS: &str = include_str!("../../extensions/omni-theme/content.js");
+
+fn window_backdrop_effects() -> WindowEffectsConfig {
+    let effects = tauri::window::EffectsBuilder::new();
+    #[cfg(target_os = "windows")]
+    let effects = effects.effect(tauri::window::Effect::Acrylic);
+    #[cfg(target_os = "macos")]
+    let effects = effects.effect(tauri::window::Effect::HudWindow);
+    effects.build()
+}
 
 mod componentapp_backends {
     include!(concat!(env!("OUT_DIR"), "/componentapp_backends.rs"));
@@ -527,6 +538,9 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
     let desktop = app
         .get_webview_window("desktop")
         .ok_or_else(|| "The desktop window was not created".to_string())?;
+    desktop
+        .set_effects(Some(window_backdrop_effects()))
+        .map_err(|error| format!("Could not blur the desktop backdrop: {error}"))?;
     let (screen, scale_factor) = get_primary_screen_bounds(&desktop)?;
     let theme_settings = current_theme_settings(app.handle())?;
     let initialization_script = window_chrome_initialization_script(&theme_settings)?;
@@ -577,6 +591,7 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
             .focused(false)
             .visible(false)
             .initialization_script(initialization_script.clone())
+            .effects(window_backdrop_effects())
             .build()
             .map_err(|error| format!("Could not create the workspace panel: {error}"))?;
 
@@ -600,6 +615,7 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
     .focused(false)
     .visible(false)
     .initialization_script(initialization_script)
+    .effects(window_backdrop_effects())
     .build()
     .map_err(|error| format!("Could not create the window controls: {error}"))?;
 
@@ -1285,6 +1301,7 @@ fn build_overview_window(app: &AppHandle, geometry: WorkspaceGeometry) -> Result
     .focused(false)
     .visible(false)
     .initialization_script(initialization_script)
+    .effects(window_backdrop_effects())
     .build()
     .map_err(|error| format!("Could not open the workspace overview: {error}"))?;
     let app_handle = app.clone();
@@ -1512,6 +1529,7 @@ async fn open_window_settings(app: AppHandle, label: String) -> Result<(), Strin
     .initialization_script(format!(
         "{initialization_script}window.__OMNI_WINDOW_SETTINGS_TARGET__ = {script_value};"
     ))
+    .effects(window_backdrop_effects())
     .build()
     .map_err(|error| format!("Could not create window settings: {error}"))?;
     set_windows_shell_layer(&app, &settings, "top")
@@ -1709,6 +1727,7 @@ async fn open_program(
         .inner_size(width, height)
         .decorations(false)
         .transparent(true)
+        .effects(window_backdrop_effects())
         .initialization_script(script);
         let builder = if is_power_menu {
             let top = geometry.panel.y + geometry.panel.height;
@@ -1740,6 +1759,7 @@ async fn open_program(
             .inner_size(1000.0, 720.0)
             .decorations(false)
             .transparent(true)
+            .effects(window_backdrop_effects())
             .initialization_script(initialization_script);
         (label, builder)
     };
