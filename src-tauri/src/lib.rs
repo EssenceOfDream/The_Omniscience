@@ -5,7 +5,7 @@ use std::{
     path::PathBuf,
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     thread,
@@ -33,8 +33,8 @@ static POPUP_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 const WINDOW_CONTROLS_WIDTH: f64 = 104.0;
 const WINDOW_CONTROLS_HEIGHT: f64 = 62.0;
 const WINDOW_CONTROLS_BOTTOM_PADDING: f64 = 0.0;
-const THEME_BASE_CSS: &str = include_str!("../../extensions/omni-theme/base.css");
-const THEME_CONTENT_JS: &str = include_str!("../../extensions/omni-theme/content.js");
+static EXTENSION_INIT_SCRIPT: OnceLock<String> = OnceLock::new();
+const EXTENSION_RUNTIME_TEMPLATE: &str = include_str!("extension-runtime.js");
 
 fn window_backdrop_effects() -> WindowEffectsConfig {
     let effects = tauri::window::EffectsBuilder::new();
@@ -328,35 +328,99 @@ fn current_theme_settings(app: &AppHandle) -> Result<Value, String> {
         .map_err(|_| "Omni Theme settings lock is unavailable".to_string())
 }
 
-fn window_chrome_initialization_script(theme_settings: &Value) -> Result<String, String> {
+fn window_chrome_initialization_script(
+    theme_settings: &Value,
+    target: &str,
+) -> Result<String, String> {
     let settings = serde_json::to_string(theme_settings)
         .map_err(|error| format!("Could not encode Omni Theme settings: {error}"))?;
-    let base_css = serde_json::to_string(THEME_BASE_CSS)
-        .map_err(|error| format!("Could not encode Omni Theme stylesheet: {error}"))?;
 
     let mut script = String::from("(()=>{const settings=");
     script.push_str(&settings);
     script.push_str(
         ";try{localStorage.setItem('__omni_settings__',JSON.stringify(settings));}catch(_){}\
          const install=()=>{const root=document.documentElement;if(!root)return false;\
-         if(!document.getElementById('__omni_theme_base__')){const style=document.createElement('style');\
-         style.id='__omni_theme_base__';style.dataset.omniTheme='true';style.textContent=",
-    );
-    script.push_str(&base_css);
-    script.push_str(";(document.head||root).appendChild(style);}");
-    script.push_str(
-        // This cyan outline is an intentional Omniscience feature; do not remove it.
-        "if(!document.getElementById('__omni_window_border__')){const border=document.createElement('div');\
+         if(!document.getElementById('__omni_window_border__')){const border=document.createElement('div');\
          border.id='__omni_window_border__';border.setAttribute('aria-hidden','true');\
          Object.assign(border.style,{position:'fixed',inset:'0',border:'1px dashed #00ffff',\
          boxSizing:'border-box',pointerEvents:'none',zIndex:'2147483647'});root.appendChild(border);}\
          return true;};if(!install()){const observer=new MutationObserver(()=>{if(install())observer.disconnect();});\
-         observer.observe(document,{childList:true,subtree:true});}",
+         observer.observe(document,{childList:true,subtree:true});}\
+         window.dispatchEvent(new CustomEvent('__omni_settings_updated__',{detail:settings}));})();",
     );
-    script.push_str(THEME_CONTENT_JS);
-    script.push_str(
-        ";window.dispatchEvent(new CustomEvent('__omni_settings_updated__',{detail:settings}));})();",
-    );
+    if let Some(extension_script) = EXTENSION_INIT_SCRIPT.get() {
+        let target = serde_json::to_string(target)
+            .map_err(|error| format!("Could not encode extension target: {error}"))?;
+        script.push_str(&extension_script.replacen("__OMNI_TARGET__", &target, 1));
+    }
+    Ok(script)
+}
+
+fn build_extension_initialization_script(extensions: &Value) -> Result<String, String> {
+    let extension_entries = extensions
+        .as_array()
+        .ok_or_else(|| "Chromium extension configuration must be an array".to_string())?;
+    let mut metadata = extensions.clone();
+    let metadata_entries = metadata
+        .as_array_mut()
+        .ok_or_else(|| "Chromium extension configuration must be an array".to_string())?;
+    let mut executors = Vec::new();
+    for (extension_index, extension) in extension_entries.iter().enumerate() {
+        let metadata_extension = metadata_entries
+            .get_mut(extension_index)
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| "Chromium extension configuration has an invalid entry".to_string())?;
+        let mut sections = Vec::new();
+        for section_name in ["preloads", "contentScripts"] {
+            let entries = extension
+                .get(section_name)
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let mut functions = Vec::new();
+            for entry in &entries {
+                let sources = entry
+                    .get("js")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| format!("{section_name} JavaScript sources must be an array"))?;
+                let mut function = String::from("function(chrome){\n");
+                for source in sources {
+                    let source = source
+                        .as_str()
+                        .ok_or_else(|| format!("{section_name} source must be a string"))?;
+                    function.push_str(source);
+                    function.push_str("\n;\n");
+                }
+                function.push('}');
+                functions.push(function);
+            }
+            if let Some(metadata_section) = metadata_extension
+                .get_mut(section_name)
+                .and_then(Value::as_array_mut)
+            {
+                for entry in metadata_section {
+                    if let Some(entry) = entry.as_object_mut() {
+                        entry.remove("js");
+                    }
+                }
+            }
+            sections.push(format!(
+                "\"{section_name}\":[{}]",
+                functions.join(",")
+            ));
+        }
+        executors.push(format!("{{{}}}", sections.join(",")));
+    }
+
+    let extensions = serde_json::to_string(&metadata)
+        .map_err(|error| format!("Could not encode Chromium extensions: {error}"))?;
+    let script = EXTENSION_RUNTIME_TEMPLATE
+        .replacen("__OMNI_EXTENSION_CONFIG__", &extensions, 1)
+        .replacen(
+            "__OMNI_EXTENSION_EXECUTORS__",
+            &format!("[{}]", executors.join(",")),
+            1,
+        );
     Ok(script)
 }
 
@@ -387,7 +451,12 @@ fn popup_window_handler(
                 return NewWindowResponse::Deny;
             }
         };
-        let initialization_script = match window_chrome_initialization_script(&theme_settings) {
+        let target = if url.path().starts_with("/extensions/") {
+            "extensions"
+        } else {
+            "webapps"
+        };
+        let initialization_script = match window_chrome_initialization_script(&theme_settings, target) {
             Ok(script) => script,
             Err(error) => {
                 eprintln!("[popup] could not prepare Omni Theme: {error}");
@@ -448,7 +517,10 @@ fn popup_window_handler(
 
 #[cfg(test)]
 mod popup_tests {
-    use super::{is_supported_popup_url, window_chrome_initialization_script};
+    use super::{
+        build_extension_initialization_script, is_supported_popup_url,
+        window_chrome_initialization_script,
+    };
 
     #[test]
     fn popup_url_support_is_limited_to_web_pages_and_blank_documents() {
@@ -471,13 +543,42 @@ mod popup_tests {
     }
 
     #[test]
-    fn popup_theme_script_injects_omni_theme_and_keeps_the_cyan_border() {
+    fn popup_script_keeps_the_cyan_border_and_extension_theme_event() {
         let settings = serde_json::json!({ "enabled": true });
-        let script = window_chrome_initialization_script(&settings).unwrap();
+        let script = window_chrome_initialization_script(&settings, "extensions").unwrap();
 
-        assert!(script.contains("__omniscienceFilterInjected"));
         assert!(script.contains("__omni_settings_updated__"));
         assert!(script.contains("__omni_window_border__"));
+    }
+
+    #[test]
+    fn extension_script_installs_content_scripts_and_chrome_storage_api() {
+        let extensions = serde_json::json!([{
+            "id": "omni-theme",
+            "targets": { "webapps": true, "extensions": true },
+            "preloads": [{
+                "matches": ["<all_urls>"],
+                "css": ["body { color: red; }"],
+                "js": ["window.__preload__ = true;"],
+            }],
+            "contentScripts": [{
+                "matches": ["<all_urls>"],
+                "runAt": "document_start",
+                "css": [],
+                "js": ["chrome.storage.local.get({}, () => {});"],
+            }],
+        }]);
+        let script = build_extension_initialization_script(&extensions).unwrap();
+
+        assert!(script.contains("chrome.storage.local.get"));
+        assert!(script.contains("extension-storage-changed"));
+        assert!(script.contains("body { color: red; }"));
+        assert!(script.contains("function(chrome){"));
+        assert!(script.contains("\"preloads\":[function(chrome){"));
+        assert!(script.contains("\"contentScripts\":[function(chrome){"));
+        assert!(script.contains("window.__preload__ = true;"));
+        assert!(script.contains("document.__omniExtensionsInitialized"));
+        assert!(!script.contains("new Function"));
     }
 }
 
@@ -831,7 +932,7 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
         .ok_or_else(|| "The desktop window was not created".to_string())?;
     let (screen, scale_factor) = get_primary_screen_bounds(&desktop)?;
     let theme_settings = current_theme_settings(app.handle())?;
-    let initialization_script = window_chrome_initialization_script(&theme_settings)?;
+    let initialization_script = window_chrome_initialization_script(&theme_settings, "shell")?;
     desktop
         .eval(&initialization_script)
         .map_err(|error| format!("Could not apply Omni Theme to the desktop: {error}"))?;
@@ -996,7 +1097,7 @@ fn component_app_init_script(
         .map_err(|error| format!("Could not encode componentapp id: {error}"))?;
     let params = serde_json::to_string(params)
         .map_err(|error| format!("Could not encode componentapp parameters: {error}"))?;
-    let theme_script = window_chrome_initialization_script(theme_settings)?;
+    let theme_script = window_chrome_initialization_script(theme_settings, "componentapps")?;
     let platform = if cfg!(target_os = "windows") {
         "win32"
     } else if cfg!(target_os = "macos") {
@@ -1342,6 +1443,34 @@ async fn node_request(
 }
 
 #[tauri::command]
+async fn extension_storage_set(
+    app: AppHandle,
+    state: State<'_, NodeBridge>,
+    extension_id: String,
+    items: Value,
+    remove_keys: Option<Vec<String>>,
+    clear: Option<bool>,
+) -> Result<(), String> {
+    let changes = call_node(
+        Arc::clone(&state.0),
+        "extension-storage-set".to_string(),
+        json!({
+            "extensionId": extension_id,
+            "items": items,
+            "removeKeys": remove_keys.unwrap_or_default(),
+            "clear": clear.unwrap_or(false),
+        }),
+    )
+    .await?;
+    app.emit(
+        "extension-storage-changed",
+        json!({ "extensionId": extension_id, "changes": changes }),
+    )
+    .map_err(|error| format!("Could not notify extensions about storage changes: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn start_file_drag(window: WebviewWindow, paths: Vec<String>) -> Result<(), String> {
     if paths.is_empty() {
         return Err("At least one file path is required".to_string());
@@ -1569,7 +1698,7 @@ fn build_overview_window(app: &AppHandle, geometry: WorkspaceGeometry) -> Result
         .ok_or_else(|| "The desktop window was not created".to_string())?;
     let (screen, _) = get_primary_screen_bounds(&desktop)?;
     let theme_settings = current_theme_settings(app)?;
-    let initialization_script = window_chrome_initialization_script(&theme_settings)?;
+    let initialization_script = window_chrome_initialization_script(&theme_settings, "shell")?;
     let geometry = calculate_workspace_geometry(screen, geometry.taskbar_height);
     let overview_y = geometry.panel.y + geometry.panel.height;
     let overview_height = (geometry.screen.y + geometry.screen.height - overview_y).max(1.0);
@@ -1801,7 +1930,7 @@ async fn open_window_settings(app: AppHandle, label: String) -> Result<(), Strin
     let script_value = serde_json::to_string(&label)
         .map_err(|error| format!("Could not encode target window label: {error}"))?;
     let theme_settings = current_theme_settings(&app)?;
-    let initialization_script = window_chrome_initialization_script(&theme_settings)?;
+    let initialization_script = window_chrome_initialization_script(&theme_settings, "shell")?;
     let settings = WebviewWindowBuilder::new(
         &app,
         "window-settings",
@@ -2045,11 +2174,24 @@ async fn open_program(
             .map_err(|error| format!("Node.js sidecar returned an invalid URL: {error}"))?;
         let label = format!("program-{window_id}");
         let theme_settings = current_theme_settings(&app)?;
-        let initialization_script = window_chrome_initialization_script(&theme_settings)?;
+        let target = if kind == "extension_popup" {
+            "extensions"
+        } else {
+            "webapps"
+        };
+        let initialization_script = window_chrome_initialization_script(&theme_settings, target)?;
+        let width = result
+            .get("width")
+            .and_then(Value::as_f64)
+            .unwrap_or(1000.0);
+        let height = result
+            .get("height")
+            .and_then(Value::as_f64)
+            .unwrap_or(720.0);
         let builder = WebviewWindowBuilder::new(&app, label.clone(), WebviewUrl::External(url))
             .title(name)
             .devtools(true)
-            .inner_size(1000.0, 720.0)
+            .inner_size(width, height)
             .decorations(false)
             .transparent(true)
             .effects(window_backdrop_effects())
@@ -2100,7 +2242,14 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            let runtime = start_node_bridge(app.handle()).map_err(std::io::Error::other)?;
+            let mut runtime = start_node_bridge(app.handle()).map_err(std::io::Error::other)?;
+            let extension_data = request_node(&mut runtime, "get-extension-runtime", json!({}))
+                .map_err(std::io::Error::other)?;
+            let extension_script = build_extension_initialization_script(&extension_data)
+                .map_err(std::io::Error::other)?;
+            EXTENSION_INIT_SCRIPT.set(extension_script).map_err(|_| {
+                std::io::Error::other("Chromium extensions were already initialized")
+            })?;
             app.manage(NodeBridge(Arc::new(Mutex::new(runtime))));
             let icon_runtime = start_node_bridge(app.handle()).map_err(std::io::Error::other)?;
             app.manage(IconNodeBridge(Arc::new(Mutex::new(icon_runtime))));
@@ -2145,6 +2294,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             node_request,
+            extension_storage_set,
             set_controls_cross_mode,
             start_file_drag,
             get_file_icons,

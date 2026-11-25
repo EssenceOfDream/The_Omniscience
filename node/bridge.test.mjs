@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:net';
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import vm from 'node:vm';
 import os from 'node:os';
 import path from 'node:path';
 import { WebSocket } from 'ws';
@@ -15,6 +16,51 @@ import {
 import { zipAndSplit } from '../componentapps/omni-archiver/zip.js';
 import buildComponentApps from '../main/vite_build.js';
 import { resolveForDisplay } from '../src/viewRuntime/paths.js';
+
+test('executes preload and content scripts from their generated entry functions', async () => {
+  const runtimeTemplate = await readFile(
+    new URL('../src-tauri/src/extension-runtime.js', import.meta.url),
+    'utf8',
+  );
+  const extensions = [{
+    id: 'runtime-test',
+    targets: { webapps: true },
+    preloads: [{ matches: ['<all_urls>'], css: [] }],
+    contentScripts: [{
+      matches: ['<all_urls>'],
+      runAt: 'document_start',
+      css: [],
+    }],
+  }];
+  const executorLiteral = `[{
+    preloads: [function(chrome) { window.__preloadRan = Boolean(chrome.runtime); }],
+    contentScripts: [function(chrome) { window.__contentScriptRan = Boolean(chrome.runtime); }],
+  }]`;
+  const script = runtimeTemplate
+    .replace('__OMNI_EXTENSION_CONFIG__', JSON.stringify(extensions))
+    .replace('__OMNI_EXTENSION_EXECUTORS__', executorLiteral)
+    .replace('__OMNI_TARGET__', '"webapps"');
+  const window = { addEventListener() {} };
+  const document = {
+    readyState: 'loading',
+    head: { appendChild() {} },
+    documentElement: {},
+    createElement: () => ({ dataset: {} }),
+    querySelector: () => null,
+    addEventListener() {},
+  };
+
+  vm.runInNewContext(script, {
+    window,
+    document,
+    location: { href: 'https://example.com/', pathname: '/' },
+    URL,
+    console,
+  });
+
+  assert.equal(window.__preloadRan, true);
+  assert.equal(window.__contentScriptRan, true);
+});
 
 async function getAvailablePort() {
   const server = createServer();
@@ -174,6 +220,111 @@ test('lists project programs and marks only apps with an HTML entry point', asyn
       nonWindowsPrograms.find(({ id }) => id === 'componentapps:windows-settings').launchable,
       false,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('discovers Manifest V3 extensions, serves their popups, and persists extension storage', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-extensions-'));
+  const extensionDir = path.join(root, 'extensions', 'theme');
+  const popupDir = path.join(root, 'public', 'omniscience', 'extensions', 'theme');
+  const context = {
+    projectRoot: root,
+    extensionStoragePath: path.join(root, 'extension-data'),
+    fileServerUrl: null,
+  };
+  try {
+    await mkdir(extensionDir, { recursive: true });
+    await mkdir(popupDir, { recursive: true });
+    await writeFile(path.join(extensionDir, 'manifest.json'), JSON.stringify({
+      manifest_version: 3,
+      name: 'Theme test',
+      version: '1.0',
+      action: { default_popup: 'popup.html' },
+      content_scripts: [{
+        matches: ['https://*.example.com/*'],
+        js: ['content.js'],
+        css: ['content.css'],
+        run_at: 'document_start',
+      }],
+      omniscience: {
+        preloads: [{
+          matches: ['<all_urls>'],
+          js: ['preload.js'],
+        }],
+        targets: { extensions: true },
+      },
+    }));
+    await writeFile(path.join(extensionDir, 'popup.html'), '<html>popup</html>');
+    await writeFile(path.join(extensionDir, 'content.js'), 'window.__extension_test__ = true;');
+    await writeFile(path.join(extensionDir, 'content.css'), 'body { color: red; }');
+    await writeFile(path.join(extensionDir, 'preload.js'), 'window.__preload_test__ = true;');
+    await writeFile(path.join(popupDir, 'popup.html'), '<html><body>extension popup</body></html>');
+
+    const listed = await handleRequest({ method: 'get-extensions-list' }, context);
+    assert.deepEqual(listed.map(({ id, type, title, launchable }) =>
+      ({ id, type, title, launchable })), [
+      { id: 'theme', type: 'extension', title: 'Theme test', launchable: true },
+    ]);
+
+    const runtime = await handleRequest({ method: 'get-extension-runtime' }, context);
+    assert.deepEqual(runtime[0].contentScripts, [{
+      matches: ['https://*.example.com/*'],
+      runAt: 'document_start',
+      css: ['body { color: red; }'],
+      js: ['window.__extension_test__ = true;'],
+    }]);
+    assert.deepEqual(runtime[0].preloads, [{
+      matches: ['<all_urls>'],
+      css: [],
+      js: ['window.__preload_test__ = true;'],
+    }]);
+    assert.deepEqual(runtime[0].targets, {
+      webapps: true,
+      componentapps: true,
+      extensions: true,
+      shell: false,
+      devtools: false,
+    });
+
+    const { server, baseUrl } = await startFileServer(path.join(root, 'public', 'omniscience'));
+    try {
+      context.fileServerUrl = baseUrl;
+      const popupWindow = await handleRequest({
+        method: 'open-program',
+        payload: { programId: 'extensions:theme', params: { popup: true } },
+      }, context);
+      assert.equal(popupWindow.kind, 'extension_popup');
+      assert.equal(popupWindow.width, 360);
+      assert.equal((await fetch(popupWindow.url)).status, 200);
+      assert.match(await (await fetch(popupWindow.url)).text(), /extension popup/);
+
+      const changes = await handleRequest({
+        method: 'extension-storage-set',
+        payload: { extensionId: 'theme', items: { enabled: true, count: 2 } },
+      }, context);
+      assert.deepEqual(changes, {
+        enabled: { newValue: true },
+        count: { newValue: 2 },
+      });
+      assert.deepEqual(await handleRequest({
+        method: 'extension-storage-get',
+        payload: { extensionId: 'theme', keys: { enabled: false, missing: 'default' } },
+      }, context), { enabled: true, missing: 'default' });
+      await handleRequest({
+        method: 'extension-storage-set',
+        payload: { extensionId: 'theme', items: {}, removeKeys: ['count'] },
+      }, context);
+      assert.deepEqual(await handleRequest({
+        method: 'extension-storage-get',
+        payload: { extensionId: 'theme' },
+      }, context), { enabled: true });
+    } finally {
+      await new Promise((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1026,7 +1177,7 @@ test('reports the Node runtime through the sidecar health request', async () => 
   assert.equal(health.projectRoot, 'C:\\Omniscience');
 });
 
-test('applies built-in theme settings to local app pages and rejects invalid settings', async () => {
+test('serves local app pages without bypassing the extension content-script runtime', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'omni-tauri-'));
   const dist = path.join(root, 'dist');
   const context = {
@@ -1040,7 +1191,7 @@ test('applies built-in theme settings to local app pages and rejects invalid set
       path.join(dist, 'webapps', 'music', 'index.html'),
       '<!doctype html><html><head><title>Music</title></head><body></body></html>',
     );
-    const { server, baseUrl } = await startFileServer(dist, () => context.themeSettings);
+    const { server, baseUrl } = await startFileServer(dist);
     try {
       const settings = await handleRequest({
         method: 'set-theme',
@@ -1051,9 +1202,9 @@ test('applies built-in theme settings to local app pages and rejects invalid set
 
       const page = await fetch(`${baseUrl}/webapps/music/index.html`);
       const html = await page.text();
-      assert.match(html, /__omniscience\/theme\/base\.css/);
-      assert.match(html, /__omniscience\/theme\/content\.js/);
-      assert.ok(html.includes('maxR\\":80'));
+      assert.match(html, /<title>Music<\/title>/);
+      assert.doesNotMatch(html, /__omniscience\/theme/);
+      assert.equal(page.headers.get('content-type'), 'text/html; charset=utf-8');
 
       await assert.rejects(
         handleRequest({

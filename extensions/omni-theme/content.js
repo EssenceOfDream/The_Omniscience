@@ -1,8 +1,8 @@
 (function () {
   'use strict';
 
-  if (window.__omniscienceFilterInjected) return;
-  window.__omniscienceFilterInjected = true;
+  if (document.__omniscienceFilterInjected) return;
+  document.__omniscienceFilterInjected = true;
 
   /* ================================================================== */
   /*  НАСТРОЙКИ                                                          */

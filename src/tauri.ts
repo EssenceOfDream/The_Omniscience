@@ -3,12 +3,6 @@ import { createRoot } from 'react-dom/client';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
-declare global {
-  interface Window {
-    __omniscienceFilterInjected?: boolean;
-  }
-}
-
 export type ProgramWindow = {
   label: string;
   title: string;
@@ -65,27 +59,6 @@ export function installWindowChrome(themeSettings?: Record<string, unknown>) {
     window.dispatchEvent(new CustomEvent('__omni_settings_updated__', { detail: themeSettings }));
   }
 
-  const installThemeAssets = () => {
-    if (!document.querySelector('[data-omni-theme]')) {
-      const stylesheet = document.createElement('link');
-      stylesheet.dataset.omniTheme = 'true';
-      stylesheet.rel = 'stylesheet';
-      stylesheet.href = '/omniscience/__omniscience/theme/base.css';
-      document.head.appendChild(stylesheet);
-    }
-    if (!window.__omniscienceFilterInjected && !document.querySelector('script[data-omni-theme]')) {
-      const script = document.createElement('script');
-      script.dataset.omniTheme = 'true';
-      script.src = '/omniscience/__omniscience/theme/content.js';
-      document.head.appendChild(script);
-    }
-  };
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', installThemeAssets, { once: true });
-  } else {
-    installThemeAssets();
-  }
 }
 
 export function mountApp(app: ReactNode) {

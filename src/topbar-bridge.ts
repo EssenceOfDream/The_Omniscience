@@ -337,6 +337,19 @@ export function installTopbarBridge() {
       ...window.electron_desktop_API,
       platform,
       invoke: async (channel: string, payload: Record<string, unknown> = {}) => {
+        if (channel === 'get-extensions-list') {
+          return nodeRequest('get-extensions-list');
+        }
+        if (channel === 'open-extension-popup') {
+          const extensionId = payload.extensionId;
+          if (typeof extensionId !== 'string' || !extensionId) {
+            throw new Error('An extension id is required');
+          }
+          return invoke('open_program', {
+            programId: `extensions:${extensionId}`,
+            params: { popup: true },
+          });
+        }
         if (channel === 'get-native-apps') {
           return nodeRequest<Array<{ id: string; name: string; launchType: string; icon: string | null }>>('list-native-apps')
             .then((items) => items.map((item) => ({
@@ -347,7 +360,6 @@ export function installTopbarBridge() {
               icon: item.icon,
             })));
         }
-        if (channel === 'get-extensions-list') return [];
         if (channel === 'topbar:get-state') return getTopbarState();
         return dispatch(channel, payload);
       },

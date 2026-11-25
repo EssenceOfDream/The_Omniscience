@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { copyFile, cp, mkdir } from 'node:fs/promises';
+import { cp, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -19,12 +19,10 @@ global.paths = {
 const buildModule = await import(pathToFileURL(path.join(projectRoot, 'main', 'vite_build.js')));
 await buildModule.default();
 
-const themeSource = path.join(projectRoot, 'extensions', 'omni-theme');
-const themeOutput = path.join(buildDir, '__omniscience', 'theme');
-await mkdir(themeOutput, { recursive: true });
-for (const file of ['base.css', 'content.js']) {
-  await copyFile(path.join(themeSource, file), path.join(themeOutput, file));
-}
+await cp(path.join(projectRoot, 'extensions'), path.join(buildDir, 'extensions'), {
+  recursive: true,
+  force: true,
+});
 
 const publicAssets = path.join(projectRoot, 'public', 'omniscience');
 const bundledAssets = path.join(projectRoot, 'dist', 'omniscience');
@@ -32,7 +30,7 @@ await Promise.all([
   mkdir(publicAssets, { recursive: true }),
   mkdir(bundledAssets, { recursive: true }),
 ]);
-for (const directory of ['assets', 'componentapps', 'webapps', 'images', 'libs', 'styles', '__omniscience']) {
+for (const directory of ['assets', 'componentapps', 'webapps', 'extensions', 'images', 'libs', 'styles']) {
   const source = path.join(buildDir, directory);
   if (!existsSync(source)) continue;
   await Promise.all([

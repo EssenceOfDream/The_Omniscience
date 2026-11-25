@@ -240,21 +240,10 @@ export default function App({ desktopId }) {
       return;
     }
 
-    // Расширения Chrome — открываются как popup внутри нашего окна
+    // Попап расширения открывается в отдельном окне приложения.
     if (app.kind === 'extension') {
-      desktopApi.invoke('get-extension-popup-url', { extensionId: app.extensionId })
-        .then((url) => {
-          if (!url) return;
-          openAsBrowserWindow({
-            id: getNewWindowId(),
-            appId: null,
-            url,
-            title: app.title,
-            icon: app.icon,
-            width: 400,
-            height: 550,
-          });
-        })
+      if (!app.launchable) return;
+      desktopApi.invoke('open-extension-popup', { extensionId: app.extensionId })
         .catch((err) => console.error('[apps-list] popup:', err));
       return;
     }
@@ -417,6 +406,7 @@ export default function App({ desktopId }) {
                     />
 
                     <CardActionArea
+                      disabled={app.kind === 'extension' && !app.launchable}
                       onClick={() => handleClick(app)}
                       sx={{ p: 2, pt: 3, textAlign: 'center' }}
                     >

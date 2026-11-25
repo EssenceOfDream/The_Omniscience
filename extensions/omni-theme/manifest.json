@@ -8,20 +8,20 @@
     "default_popup": "popup.html",
     "default_title": "Omni Theme"
   },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>", "file:///*"],
-      "css": ["base.css"],
-      "js": ["bridge.js"],
-      "run_at": "document_start",
-      "all_frames": false
-    },
-    {
-      "matches": ["<all_urls>", "file:///*"],
-      "js": ["content.js"],
-      "run_at": "document_start",
-      "all_frames": false,
-      "world": "MAIN"
+  "omniscience": {
+    "preloads": [
+      {
+        "matches": ["<all_urls>"],
+        "css": ["base.css"],
+        "js": ["bridge.js", "content.js"]
+      }
+    ],
+    "targets": {
+      "webapps": true,
+      "componentapps": true,
+      "extensions": true,
+      "shell": true,
+      "devtools": false
     }
-  ]
+  }
 }

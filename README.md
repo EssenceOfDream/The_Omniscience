@@ -61,8 +61,31 @@ The **Files** section provides directory navigation, listing, folder/file
 creation, and rename operations through the same Node.js sidecar. It can also
 open componentapps with the supported frontend entrypoints in frameless Tauri
 windows. Creation and rename refuse to replace existing entries.
-The **Appearance** section makes Omni Theme a built-in Tauri feature and
-applies its existing color-processing engine to the shell and program windows.
+The **Appearance** section configures the bundled `omni-theme` extension. Its
+Manifest V3 content scripts apply the existing color-processing engine to the
+shell and matching program windows.
+
+## Chromium extensions
+
+Manifest V3 extensions placed in `extensions/<extension-id>` are discovered
+at startup; restart the app after adding or changing one. The app injects
+matching `content_scripts` through its document-created preload and schedules
+them according to `run_at`. The app also supports its own top-level
+`omniscience` manifest object: `preloads` has `matches`, `css`, and `js` (no
+`run_at`; it runs immediately at preload), while `targets` enables application
+areas. Target defaults are `webapps: true`, `componentapps: true`,
+`extensions: false`, `shell: false`, and `devtools: false`. `omni-theme`
+enables all targets and uses `omniscience.preloads`.
+
+The app exposes a small `chrome.runtime` API and persistent
+`chrome.storage.local` get/set/remove/clear operations. Extensions with
+`action.default_popup` appear in the application catalog and open their popup
+in a separate Tauri window.
+
+This is a hand-built compatibility layer, not a full Chromium extension host.
+Background/service workers, isolated execution worlds, `chrome.tabs`,
+`chrome.scripting`, permissions, and most other Chromium APIs are not
+implemented. Content scripts currently execute in the page's main world.
 
 ## Componentapp backends
 
@@ -87,14 +110,15 @@ support.
 ## Current scope
 
 This migration slice validates the three-window Tauri shell, Node bridge,
-program catalog, filesystem workflows, built-in theme, desktop file grid, and
+program catalog, filesystem workflows, the extension-based theme, basic
+Manifest V3 content scripts and action popups, desktop file grid, and
 standalone webapp windows with basic lifecycle controls. Other app-specific
 legacy Electron IPC handlers still require a Tauri backend before their
 IPC-dependent features can work. The desktop grid does
 not yet have native file icons, media previews, or context-menu/drag
 integrations. A customizable desktop window layout, Windows desktop
-integration, extension runtime, and app-specific Electron IPC are still future
-work. Componentapps other than `create-item`, `rename`, and `windows-settings`,
-and extensions are shown in the catalog but are not yet launchable. The
+integration, broader Chromium API compatibility, and app-specific Electron IPC
+are still future work. Componentapps other than `create-item`, `rename`, and
+`windows-settings` are shown in the catalog but are not yet launchable. The
 file-dialog componentapps support only the file operations needed by those
 dialogs.
