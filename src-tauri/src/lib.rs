@@ -487,6 +487,7 @@ fn popup_window_handler(
                 .devtools(true)
                 .decorations(false)
                 .transparent(true)
+                .effects(window_backdrop_effects())
                 .initialization_script(initialization_script)
                 .on_new_window(popup_window_handler(app.clone()))
                 .on_document_title_changed(|window, title| {
