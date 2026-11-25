@@ -80,7 +80,8 @@ enables all targets and uses `omniscience.preloads`.
 The app exposes a small `chrome.runtime` API and persistent
 `chrome.storage.local` get/set/remove/clear operations. Extensions with
 `action.default_popup` appear in the application catalog and open their popup
-in a separate Tauri window.
+in a separate Tauri window on the app's local origin. Popup windows receive a
+dedicated Tauri capability; remote program windows are not granted that access.
 
 This is a hand-built compatibility layer, not a full Chromium extension host.
 Background/service workers, isolated execution worlds, `chrome.tabs`,

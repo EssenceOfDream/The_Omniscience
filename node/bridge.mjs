@@ -2194,13 +2194,16 @@ export async function handleRequest(request, context) {
     if (program.category === 'extensions' && request.payload?.params?.popup === true) {
       const extension = await loadExtension(projectRoot, program.name);
       if (!extension.popup) throw new Error(`Extension ${extension.name} has no action popup`);
-      if (!context.fileServerUrl) throw new Error('Local extension server is unavailable');
-      const popupPath = extension.popup.split('/').map(encodeURIComponent).join('/');
       return {
         kind: 'extension_popup',
         name: extension.name,
         icon: extension.icon,
-        url: `${context.fileServerUrl}/extensions/${encodeURIComponent(extension.id)}/${popupPath}`,
+        appPath: path.posix.join(
+          'omniscience',
+          'extensions',
+          extension.id,
+          extension.popup,
+        ),
         width: 360,
         height: 600,
       };

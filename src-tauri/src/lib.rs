@@ -1443,14 +1443,65 @@ async fn node_request(
 }
 
 #[tauri::command]
+async fn extension_storage_get(
+    window: WebviewWindow,
+    state: State<'_, NodeBridge>,
+    extension_id: String,
+    keys: Option<Value>,
+) -> Result<Value, String> {
+    validate_extension_storage_window(&window, &extension_id)?;
+    call_node(
+        Arc::clone(&state.0),
+        "extension-storage-get".to_string(),
+        json!({ "extensionId": extension_id, "keys": keys }),
+    )
+    .await
+}
+
+fn validate_extension_storage_window(
+    window: &WebviewWindow,
+    extension_id: &str,
+) -> Result<(), String> {
+    let label = window.label();
+    if matches!(
+        label,
+        "desktop" | "panel" | "controls" | "overview" | "window-settings"
+    ) || label.starts_with("component-")
+    {
+        return Ok(());
+    }
+
+    if !label.starts_with("program-extension-") {
+        return Err("Extension storage is unavailable to this window".to_string());
+    }
+
+    let url = window
+        .url()
+        .map_err(|error| format!("Could not read extension popup URL: {error}"))?;
+    let mut expected_url = tauri::Url::parse("http://localhost/")
+        .map_err(|error| format!("Could not prepare extension popup URL: {error}"))?;
+    expected_url
+        .path_segments_mut()
+        .map_err(|_| "Could not prepare extension popup URL".to_string())?
+        .extend(["omniscience", "extensions", extension_id, ""]);
+
+    if !url.path().starts_with(expected_url.path()) {
+        return Err("Extension popup cannot access another extension's storage".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn extension_storage_set(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, NodeBridge>,
     extension_id: String,
     items: Value,
     remove_keys: Option<Vec<String>>,
     clear: Option<bool>,
 ) -> Result<(), String> {
+    validate_extension_storage_window(&window, &extension_id)?;
     let changes = call_node(
         Arc::clone(&state.0),
         "extension-storage-set".to_string(),
@@ -1462,11 +1513,22 @@ async fn extension_storage_set(
         }),
     )
     .await?;
-    app.emit(
-        "extension-storage-changed",
-        json!({ "extensionId": extension_id, "changes": changes }),
-    )
-    .map_err(|error| format!("Could not notify extensions about storage changes: {error}"))?;
+
+    let payload = json!({ "extensionId": extension_id, "changes": changes });
+    app.emit("extension-storage-changed", payload.clone())
+        .map_err(|error| format!("Could not notify extensions about storage changes: {error}"))?;
+    let payload = serde_json::to_string(&payload)
+        .map_err(|error| format!("Could not encode extension storage changes: {error}"))?;
+    let script = format!(
+        "window.dispatchEvent(new CustomEvent('__omniscience_extension_storage_changed__',{{detail:{payload}}}));"
+    );
+    for (label, popup) in app.webview_windows() {
+        if label.starts_with("program-extension-") {
+            if let Err(error) = popup.eval(&script) {
+                eprintln!("[extensions] could not notify popup {label} about storage changes: {error}");
+            }
+        }
+    }
     Ok(())
 }
 
@@ -2166,13 +2228,27 @@ async fn open_program(
         };
         (label, builder)
     } else {
-        let url = result
-            .get("url")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "Node.js sidecar returned no program URL".to_string())?
-            .parse()
-            .map_err(|error| format!("Node.js sidecar returned an invalid URL: {error}"))?;
-        let label = format!("program-{window_id}");
+        let is_extension_popup = kind == "extension_popup";
+        let webview_url = if is_extension_popup {
+            let app_path = result
+                .get("appPath")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "Node.js sidecar returned no extension popup path".to_string())?;
+            WebviewUrl::App(PathBuf::from(app_path))
+        } else {
+            let url = result
+                .get("url")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "Node.js sidecar returned no program URL".to_string())?
+                .parse()
+                .map_err(|error| format!("Node.js sidecar returned an invalid URL: {error}"))?;
+            WebviewUrl::External(url)
+        };
+        let label = if is_extension_popup {
+            format!("program-extension-{window_id}")
+        } else {
+            format!("program-{window_id}")
+        };
         let theme_settings = current_theme_settings(&app)?;
         let target = if kind == "extension_popup" {
             "extensions"
@@ -2188,7 +2264,7 @@ async fn open_program(
             .get("height")
             .and_then(Value::as_f64)
             .unwrap_or(720.0);
-        let builder = WebviewWindowBuilder::new(&app, label.clone(), WebviewUrl::External(url))
+        let builder = WebviewWindowBuilder::new(&app, label.clone(), webview_url)
             .title(name)
             .devtools(true)
             .inner_size(width, height)
@@ -2294,6 +2370,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             node_request,
+            extension_storage_get,
             extension_storage_set,
             set_controls_cross_mode,
             start_file_drag,

@@ -77,16 +77,23 @@
       }
     };
 
-    if (window.__TAURI__?.event?.listen) {
-      window.__TAURI__.event.listen('extension-storage-changed', ({ payload }) => {
-        if (payload?.extensionId === id) notifyStorageChanged(payload.changes);
-      }).catch((error) => console.error('[extensions] storage event subscription failed:', error));
+    if (target === 'shell' || target === 'componentapps') {
+      if (window.__TAURI__?.event?.listen) {
+        window.__TAURI__.event.listen('extension-storage-changed', ({ payload }) => {
+          if (payload?.extensionId === id) notifyStorageChanged(payload.changes);
+        }).catch((error) =>
+          console.error('[extensions] storage event subscription failed:', error));
+      }
     }
 
+    window.addEventListener('__omniscience_extension_storage_changed__', ({ detail }) => {
+      if (detail?.extensionId === id) notifyStorageChanged(detail.changes);
+    });
+
     const readStorage = (keys) => invoke
-      ? invoke('node_request', {
-        method: 'extension-storage-get',
-        payload: { extensionId: id, keys: keys ?? null },
+      ? invoke('extension_storage_get', {
+        extensionId: id,
+        keys: keys ?? null,
       })
       : Promise.resolve(readFallbackStorage(keys));
 
@@ -142,7 +149,14 @@
       getURL(path = '') {
         const cleanPath = String(path).replace(/^\/+/, '');
         const encodedPath = cleanPath.split('/').map(encodeURIComponent).join('/');
-        return `${location.origin}/extensions/${encodeURIComponent(id)}/${encodedPath}`;
+        let basePath = `/extensions/${encodeURIComponent(id)}/`;
+        const extensionPath = location.pathname.match(/^(.*\/extensions\/([^/]+)\/)/);
+        if (extensionPath) {
+          try {
+            if (decodeURIComponent(extensionPath[2]) === id) basePath = extensionPath[1];
+          } catch {}
+        }
+        return `${location.origin}${basePath}${encodedPath}`;
       },
       onMessage: eventFor(messageListeners),
       sendMessage(message, callback) {
@@ -202,7 +216,7 @@
     return { runtime, storage: { local, onChanged: eventFor(storageListeners) } };
   }
 
-  const pageExtension = location.pathname.match(/^\/extensions\/([^/]+)\//);
+  const pageExtension = location.pathname.match(/(?:^|\/)extensions\/([^/]+)\//);
   if (pageExtension) {
     const extensionId = decodeURIComponent(pageExtension[1]);
     window.chrome = window.chrome || {};

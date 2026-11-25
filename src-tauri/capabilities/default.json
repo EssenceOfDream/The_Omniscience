@@ -4,6 +4,8 @@
   "description": "Capability for the desktop workspace windows",
   "windows": ["desktop", "panel", "controls", "overview", "window-settings", "component-*"],
   "permissions": [
+    "trusted-app-commands",
+    "extension-storage",
     "core:default",
     "dialog:allow-open",
     "dialog:allow-save",

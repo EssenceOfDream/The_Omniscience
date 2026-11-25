@@ -62,6 +62,81 @@ test('executes preload and content scripts from their generated entry functions'
   assert.equal(window.__contentScriptRan, true);
 });
 
+test('recognizes extension popups served from the Tauri app origin', async () => {
+  const runtimeTemplate = await readFile(
+    new URL('../src-tauri/src/extension-runtime.js', import.meta.url),
+    'utf8',
+  );
+  const extensions = [{
+    id: 'theme',
+    targets: { extensions: true },
+    preloads: [{ matches: ['<all_urls>'], css: [] }],
+    contentScripts: [{ matches: ['<all_urls>'], runAt: 'document_start', css: [] }],
+  }];
+  const executorLiteral = `[{
+    preloads: [function() { window.__preloadRan = true; }],
+    contentScripts: [function() { window.__contentScriptRan = true; }],
+  }]`;
+  const script = runtimeTemplate
+    .replace('__OMNI_EXTENSION_CONFIG__', JSON.stringify(extensions))
+    .replace('__OMNI_EXTENSION_EXECUTORS__', executorLiteral)
+    .replace('__OMNI_TARGET__', '"extensions"');
+  const ipcCalls = [];
+  let eventListenCalls = 0;
+  const window = {
+    __TAURI__: {
+      core: {
+        invoke(command, args) {
+          ipcCalls.push({ command, args });
+          return Promise.resolve(command === 'extension_storage_get' ? { enabled: true } : undefined);
+        },
+      },
+      event: {
+        listen() {
+          eventListenCalls += 1;
+          return Promise.resolve(() => {});
+        },
+      },
+    },
+    addEventListener() {},
+  };
+  const document = {
+    readyState: 'loading',
+    head: { appendChild() {} },
+    documentElement: {},
+    createElement: () => ({ dataset: {} }),
+    querySelector: () => null,
+    addEventListener() {},
+  };
+
+  vm.runInNewContext(script, {
+    window,
+    document,
+    location: {
+      href: 'http://tauri.localhost/omniscience/extensions/theme/popup.html',
+      origin: 'http://tauri.localhost',
+      pathname: '/omniscience/extensions/theme/popup.html',
+    },
+    URL,
+    console,
+  });
+
+  assert.equal(window.chrome.runtime.id, 'theme');
+  assert.equal(
+    window.chrome.runtime.getURL('icons/icon.png'),
+    'http://tauri.localhost/omniscience/extensions/theme/icons/icon.png',
+  );
+  assert.equal(window.__preloadRan, true);
+  assert.equal(window.__contentScriptRan, undefined);
+  assert.deepEqual(await window.chrome.storage.local.get('enabled'), { enabled: true });
+  await window.chrome.storage.local.set({ enabled: false });
+  assert.deepEqual(ipcCalls.map(({ command }) => command), [
+    'extension_storage_get',
+    'extension_storage_set',
+  ]);
+  assert.equal(eventListenCalls, 0);
+});
+
 async function getAvailablePort() {
   const server = createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -225,10 +300,10 @@ test('lists project programs and marks only apps with an HTML entry point', asyn
   }
 });
 
-test('discovers Manifest V3 extensions, serves their popups, and persists extension storage', async () => {
+test('discovers Manifest V3 extensions, resolves local popup assets, and persists extension storage', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'omni-extensions-'));
   const extensionDir = path.join(root, 'extensions', 'theme');
-  const popupDir = path.join(root, 'public', 'omniscience', 'extensions', 'theme');
+  const popupDir = path.join(root, 'dist', 'omniscience', 'extensions', 'theme');
   const context = {
     projectRoot: root,
     extensionStoragePath: path.join(root, 'extension-data'),
@@ -288,43 +363,38 @@ test('discovers Manifest V3 extensions, serves their popups, and persists extens
       devtools: false,
     });
 
-    const { server, baseUrl } = await startFileServer(path.join(root, 'public', 'omniscience'));
-    try {
-      context.fileServerUrl = baseUrl;
-      const popupWindow = await handleRequest({
-        method: 'open-program',
-        payload: { programId: 'extensions:theme', params: { popup: true } },
-      }, context);
-      assert.equal(popupWindow.kind, 'extension_popup');
-      assert.equal(popupWindow.width, 360);
-      assert.equal((await fetch(popupWindow.url)).status, 200);
-      assert.match(await (await fetch(popupWindow.url)).text(), /extension popup/);
+    const popupWindow = await handleRequest({
+      method: 'open-program',
+      payload: { programId: 'extensions:theme', params: { popup: true } },
+    }, context);
+    assert.equal(popupWindow.kind, 'extension_popup');
+    assert.equal(popupWindow.appPath, 'omniscience/extensions/theme/popup.html');
+    assert.equal(popupWindow.width, 360);
+    assert.match(
+      await readFile(path.join(root, 'dist', popupWindow.appPath), 'utf8'),
+      /extension popup/,
+    );
 
-      const changes = await handleRequest({
-        method: 'extension-storage-set',
-        payload: { extensionId: 'theme', items: { enabled: true, count: 2 } },
-      }, context);
-      assert.deepEqual(changes, {
-        enabled: { newValue: true },
-        count: { newValue: 2 },
-      });
-      assert.deepEqual(await handleRequest({
-        method: 'extension-storage-get',
-        payload: { extensionId: 'theme', keys: { enabled: false, missing: 'default' } },
-      }, context), { enabled: true, missing: 'default' });
-      await handleRequest({
-        method: 'extension-storage-set',
-        payload: { extensionId: 'theme', items: {}, removeKeys: ['count'] },
-      }, context);
-      assert.deepEqual(await handleRequest({
-        method: 'extension-storage-get',
-        payload: { extensionId: 'theme' },
-      }, context), { enabled: true });
-    } finally {
-      await new Promise((resolve, reject) => {
-        server.close((error) => error ? reject(error) : resolve());
-      });
-    }
+    const changes = await handleRequest({
+      method: 'extension-storage-set',
+      payload: { extensionId: 'theme', items: { enabled: true, count: 2 } },
+    }, context);
+    assert.deepEqual(changes, {
+      enabled: { newValue: true },
+      count: { newValue: 2 },
+    });
+    assert.deepEqual(await handleRequest({
+      method: 'extension-storage-get',
+      payload: { extensionId: 'theme', keys: { enabled: false, missing: 'default' } },
+    }, context), { enabled: true, missing: 'default' });
+    await handleRequest({
+      method: 'extension-storage-set',
+      payload: { extensionId: 'theme', items: {}, removeKeys: ['count'] },
+    }, context);
+    assert.deepEqual(await handleRequest({
+      method: 'extension-storage-get',
+      payload: { extensionId: 'theme' },
+    }, context), { enabled: true });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

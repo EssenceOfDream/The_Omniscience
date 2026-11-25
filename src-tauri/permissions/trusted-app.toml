@@ -1,0 +1,26 @@
+[[permission]]
+identifier = "trusted-app-commands"
+description = "Allows trusted local app windows to call the app's registered commands."
+commands.allow = [
+  "node_request",
+  "set_controls_cross_mode",
+  "start_file_drag",
+  "get_file_icons",
+  "trash_path",
+  "show_desktop_context_menu",
+  "componentapp_request",
+  "toggle_overview",
+  "open_overview",
+  "close_overview",
+  "open_program",
+  "update_theme",
+  "list_program_windows",
+  "manage_program_window",
+  "set_program_window_bounds",
+  "prepare_program_window_drag",
+  "open_window_settings",
+  "get_program_window_settings",
+  "set_program_window_layer",
+  "reload_program_window",
+  "open_program_devtools"
+]
