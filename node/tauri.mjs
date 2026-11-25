@@ -29,6 +29,22 @@ function findAvailablePort() {
   });
 }
 
+function isPortAvailable(port) {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', (error) => {
+      if (error.code === 'EADDRINUSE') resolve(false);
+      else reject(error);
+    });
+    server.listen(port, '127.0.0.1', () => {
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve(true);
+      });
+    });
+  });
+}
+
 if (args[0] === 'dev') {
   const existingConfig = process.env.TAURI_CONFIG
     ? JSON.parse(process.env.TAURI_CONFIG)
@@ -37,7 +53,13 @@ if (args[0] === 'dev') {
     throw new Error('TAURI_CONFIG must contain a JSON object.');
   }
 
-  const port = await findAvailablePort();
+  const requestedPort = Number.parseInt(process.env.OMNISCIENCE_DEV_PORT ?? '', 10);
+  const hasRequestedPort = Number.isInteger(requestedPort)
+    && requestedPort > 0
+    && requestedPort <= 65535
+    && await isPortAvailable(requestedPort);
+  const port = hasRequestedPort ? requestedPort : await findAvailablePort();
+  process.env.OMNISCIENCE_DEV_PORT = String(port);
   const beforeDevCommand = [
     'npm run build:project',
     `npm run preview -- --host 127.0.0.1 --port ${port} --strictPort`,

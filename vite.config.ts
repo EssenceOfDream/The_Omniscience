@@ -5,6 +5,12 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 const host = process.env.TAURI_DEV_HOST;
 const configDir = path.dirname(fileURLToPath(import.meta.url));
+const requestedDevPort = Number.parseInt(process.env.OMNISCIENCE_DEV_PORT ?? "", 10);
+const devPort = Number.isInteger(requestedDevPort)
+  && requestedDevPort > 0
+  && requestedDevPort <= 65535
+  ? requestedDevPort
+  : 1420;
 
 // https://vite.dev/config/
 export default defineConfig(() => ({
@@ -34,9 +40,9 @@ export default defineConfig(() => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
+  // Use the port shared by the updater and the Dev command when provided.
   server: {
-    port: 1420,
+    port: devPort,
     strictPort: true,
     host: host || false,
     fs: {
@@ -62,7 +68,7 @@ export default defineConfig(() => ({
     },
   },
   preview: {
-    port: 1420,
+    port: devPort,
     strictPort: true,
   },
 }));
