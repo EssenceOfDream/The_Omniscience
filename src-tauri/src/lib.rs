@@ -11,6 +11,11 @@ use std::{
     thread,
     time::Duration,
 };
+#[cfg(not(debug_assertions))]
+use std::{
+    fs::{self, File},
+    io::Cursor,
+};
 use tauri::{
     AppHandle, Emitter, LogicalPosition, Manager, RunEvent, State, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder, WindowEvent,
@@ -39,6 +44,11 @@ fn window_backdrop_effects() -> WindowEffectsConfig {
 
 mod componentapp_backends {
     include!(concat!(env!("OUT_DIR"), "/componentapp_backends.rs"));
+}
+
+#[cfg(not(debug_assertions))]
+mod embedded_runtime {
+    include!(concat!(env!("OUT_DIR"), "/embedded_runtime.rs"));
 }
 
 #[cfg(target_os = "windows")]
@@ -109,18 +119,146 @@ struct WorkspaceGeometry {
 
 struct ControlsCrossMode(Mutex<bool>);
 
-fn start_node_bridge() -> Result<NodeRuntime, String> {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let project_root = manifest_dir
-        .join("..")
-        .canonicalize()
-        .map_err(|error| format!("Could not resolve standalone project root: {error}"))?;
-    let script_path = manifest_dir
-        .join("../node/bridge.mjs")
-        .canonicalize()
-        .map_err(|error| format!("Could not resolve Node bridge: {error}"))?;
+fn runtime_root(_app: &AppHandle) -> Result<PathBuf, String> {
+    #[cfg(debug_assertions)]
+    {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        return manifest_dir
+            .join("..")
+            .canonicalize()
+            .map_err(|error| format!("Could not resolve standalone project root: {error}"));
+    }
 
-    let mut command = Command::new("node");
+    #[cfg(not(debug_assertions))]
+    {
+        let app_data_dir = _app
+            .path()
+            .app_data_dir()
+            .map_err(|error| format!("Could not resolve the app data directory: {error}"))?;
+        let runtime_dir = app_data_dir.join("runtime");
+        let marker_path = runtime_dir.join(".runtime-bundle-hash");
+        let runtime_is_current = fs::read_to_string(&marker_path)
+            .map(|hash| hash.trim() == embedded_runtime::HASH)
+            .unwrap_or(false)
+            && runtime_dir.join("node.exe").is_file();
+        if runtime_is_current {
+            return Ok(runtime_dir);
+        }
+
+        fs::create_dir_all(&app_data_dir)
+            .map_err(|error| format!("Could not create the app data directory: {error}"))?;
+        let staging_dir = app_data_dir.join(format!("runtime-stage-{}", std::process::id()));
+        let backup_dir = app_data_dir.join(format!("runtime-backup-{}", std::process::id()));
+        if staging_dir.exists() {
+            fs::remove_dir_all(&staging_dir).map_err(|error| {
+                format!("Could not clear previous runtime staging data: {error}")
+            })?;
+        }
+        if backup_dir.exists() {
+            fs::remove_dir_all(&backup_dir)
+                .map_err(|error| format!("Could not clear previous runtime backup: {error}"))?;
+        }
+        fs::create_dir_all(&staging_dir)
+            .map_err(|error| format!("Could not prepare runtime extraction: {error}"))?;
+
+        let extract_result = (|| {
+            let mut archive = zip::ZipArchive::new(Cursor::new(embedded_runtime::BUNDLE))
+                .map_err(|error| format!("Could not open embedded Node.js runtime: {error}"))?;
+            for index in 0..archive.len() {
+                let mut entry = archive
+                    .by_index(index)
+                    .map_err(|error| format!("Could not read runtime archive entry: {error}"))?;
+                let relative_path = entry
+                    .enclosed_name()
+                    .ok_or_else(|| "Runtime archive contains an unsafe path".to_string())?
+                    .to_path_buf();
+                if entry
+                    .unix_mode()
+                    .map(|mode| mode & 0o170000 == 0o120000)
+                    .unwrap_or(false)
+                {
+                    return Err("Runtime archive contains an unsupported symbolic link".to_string());
+                }
+                let output_path = staging_dir.join(relative_path);
+                if entry.is_dir() {
+                    fs::create_dir_all(&output_path).map_err(|error| {
+                        format!(
+                            "Could not create runtime directory {}: {error}",
+                            output_path.display()
+                        )
+                    })?;
+                    continue;
+                }
+                if let Some(parent) = output_path.parent() {
+                    fs::create_dir_all(parent).map_err(|error| {
+                        format!(
+                            "Could not create runtime directory {}: {error}",
+                            parent.display()
+                        )
+                    })?;
+                }
+                let mut output_file = File::create(&output_path).map_err(|error| {
+                    format!(
+                        "Could not create runtime file {}: {error}",
+                        output_path.display()
+                    )
+                })?;
+                std::io::copy(&mut entry, &mut output_file).map_err(|error| {
+                    format!(
+                        "Could not extract runtime file {}: {error}",
+                        output_path.display()
+                    )
+                })?;
+            }
+            fs::write(
+                staging_dir.join(".runtime-bundle-hash"),
+                embedded_runtime::HASH,
+            )
+            .map_err(|error| format!("Could not mark the extracted runtime: {error}"))?;
+            if runtime_dir.exists() {
+                fs::rename(&runtime_dir, &backup_dir)
+                    .map_err(|error| format!("Could not replace the previous runtime: {error}"))?;
+            }
+            if let Err(error) = fs::rename(&staging_dir, &runtime_dir) {
+                if backup_dir.exists() {
+                    fs::rename(&backup_dir, &runtime_dir).map_err(|restore_error| {
+                        format!(
+                            "Could not install the new runtime ({error}) or restore the previous runtime ({restore_error})"
+                        )
+                    })?;
+                }
+                return Err(format!("Could not install the embedded runtime: {error}"));
+            }
+            if backup_dir.exists() {
+                if let Err(error) = fs::remove_dir_all(&backup_dir) {
+                    eprintln!("[runtime] Could not remove previous runtime backup: {error}");
+                }
+            }
+            Ok(())
+        })();
+
+        if let Err(error) = extract_result {
+            if staging_dir.exists() {
+                if let Err(cleanup_error) = fs::remove_dir_all(&staging_dir) {
+                    eprintln!("[runtime] Could not clean up failed extraction: {cleanup_error}");
+                }
+            }
+            return Err(error);
+        }
+        Ok(runtime_dir)
+    }
+}
+
+fn start_node_bridge(app: &AppHandle) -> Result<NodeRuntime, String> {
+    let project_root = runtime_root(app)?;
+    let script_path = project_root.join("node").join("bridge.mjs");
+    let node_executable = if cfg!(debug_assertions) {
+        PathBuf::from("node")
+    } else {
+        project_root.join("node.exe")
+    };
+
+    let mut command = Command::new(node_executable);
     command
         .arg(script_path)
         .arg(&project_root)
@@ -1834,9 +1972,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let runtime = start_node_bridge().map_err(std::io::Error::other)?;
+            let runtime = start_node_bridge(app.handle()).map_err(std::io::Error::other)?;
             app.manage(NodeBridge(Arc::new(Mutex::new(runtime))));
-            let icon_runtime = start_node_bridge().map_err(std::io::Error::other)?;
+            let icon_runtime = start_node_bridge(app.handle()).map_err(std::io::Error::other)?;
             app.manage(IconNodeBridge(Arc::new(Mutex::new(icon_runtime))));
             app.manage(ProgramWindowIcons(Mutex::new(HashMap::new())));
             app.manage(DesktopContextMenuState(Mutex::new(Value::Null)));

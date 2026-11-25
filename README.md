@@ -16,6 +16,13 @@ The Tauri command rebuilds local app assets, serves the Tauri frontend from
 `dist`, and then launches the app. Opening the frontend alone does not provide
 the Tauri or Node.js APIs.
 
+`npm run tauri -- dev` selects an available loopback port for the preview
+server and configures Tauri to use that same port. To create a standalone
+Windows executable, run `npm run build`; the resulting
+`src-tauri/target/release/The_Omniscience.exe` includes the Node.js sidecar and
+its runtime files. On first launch, the sidecar is extracted under the app's
+local AppData directory. WebView2 remains a Windows system requirement.
+
 The app builds the copied web assets, starts a persistent Node.js sidecar,
 and creates three separate workspace windows: a full-screen desktop, a top
 panel, and a window-control pad at the left edge. On Windows the 28-pixel panel

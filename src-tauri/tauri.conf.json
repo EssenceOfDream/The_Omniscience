@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "The_Omniscience",
-  "version": "13.1.1",
+  "version": "13.2.0",
   "identifier": "com.essenceofdream.omniscience",
   "build": {
     "beforeDevCommand": "npm run build:project && npm run preview",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:frontend",
     "frontendDist": "../dist"
   },
   "app": {

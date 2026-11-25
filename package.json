@@ -1,15 +1,16 @@
 {
   "name": "The_Omniscience",
   "private": true,
-  "version": "13.1.1",
+  "version": "13.2.0",
   "type": "module",
   "scripts": {
     "start": "npm run tauri dev",
     "dev": "vite preview --host 127.0.0.1",
-    "build": "npm run build:project",
+    "build": "node node/tauri.mjs build --no-bundle",
+    "build:frontend": "npm run build:project && node node/package-runtime.mjs",
     "build:project": "node node/build-project.mjs && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "tauri": "tauri",
+    "tauri": "node node/tauri.mjs",
     "test:node": "node --test node/bridge.test.mjs"
   },
   "dependencies": {
