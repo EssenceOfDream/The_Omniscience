@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "webapp-extension-storage",
+  "description": "Allows webapp windows to access extension storage.",
+  "remote": {
+    "urls": ["http://*", "https://*"]
+  },
+  "windows": ["program-[0-9]*"],
+  "permissions": ["extension-storage"]
+}

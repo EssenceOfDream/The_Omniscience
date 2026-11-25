@@ -356,6 +356,18 @@ fn window_chrome_initialization_script(
     Ok(script)
 }
 
+fn extension_target_for_webview(label: &str) -> &'static str {
+    if label.starts_with("component-") {
+        "componentapps"
+    } else if label.starts_with("program-extension-") {
+        "extensions"
+    } else if label.starts_with("program-") {
+        "webapps"
+    } else {
+        "shell"
+    }
+}
+
 fn build_extension_initialization_script(extensions: &Value) -> Result<String, String> {
     let extension_entries = extensions
         .as_array()
@@ -468,7 +480,6 @@ fn popup_window_handler(
         let label = format!("program-popup-{id}");
         let title = url.host_str().unwrap_or("Popup").to_string();
         let app_handle = app.clone();
-        let page_load_script = initialization_script.clone();
         let builder =
             WebviewWindowBuilder::new(&app, label.clone(), WebviewUrl::External(url.clone()))
                 .window_features(features)
@@ -477,14 +488,6 @@ fn popup_window_handler(
                 .decorations(false)
                 .transparent(true)
                 .initialization_script(initialization_script)
-                .on_page_load(move |window, event| {
-                    if event.event() != PageLoadEvent::Finished {
-                        return;
-                    }
-                    if let Err(error) = window.eval(&page_load_script) {
-                        eprintln!("[popup] could not apply Omni Theme after page load: {error}");
-                    }
-                })
                 .on_new_window(popup_window_handler(app.clone()))
                 .on_document_title_changed(|window, title| {
                     if let Err(error) = window.set_title(&title) {
@@ -518,8 +521,8 @@ fn popup_window_handler(
 #[cfg(test)]
 mod popup_tests {
     use super::{
-        build_extension_initialization_script, is_supported_popup_url,
-        window_chrome_initialization_script,
+        build_extension_initialization_script, extension_target_for_webview, is_supported_popup_url,
+        is_webapp_storage_window, window_chrome_initialization_script,
     };
 
     #[test]
@@ -539,6 +542,47 @@ mod popup_tests {
             "tauri://localhost/index.html",
         ] {
             assert!(!is_supported_popup_url(&url.parse().unwrap()), "{url}");
+        }
+    }
+
+    #[test]
+    fn extension_storage_is_limited_to_http_webapp_windows() {
+        for label in ["program-1", "program-25"] {
+            for url in ["https://example.com/", "http://127.0.0.1:53808/"] {
+                assert!(
+                    is_webapp_storage_window(label, &url.parse().unwrap()),
+                    "{label} {url}"
+                );
+            }
+        }
+
+        for (label, url) in [
+            (
+                "program-extension-1",
+                "http://localhost/omniscience/extensions/test/",
+            ),
+            ("program-popup-1", "https://example.com/"),
+            ("component-settings", "http://localhost/"),
+            ("program-1", "file:///C:/private.txt"),
+        ] {
+            assert!(
+                !is_webapp_storage_window(label, &url.parse().unwrap()),
+                "{label} {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn extension_targets_are_selected_from_webview_labels() {
+        for (label, target) in [
+            ("desktop", "shell"),
+            ("panel", "shell"),
+            ("component-settings", "componentapps"),
+            ("program-1", "webapps"),
+            ("program-popup-1", "webapps"),
+            ("program-extension-1", "extensions"),
+        ] {
+            assert_eq!(extension_target_for_webview(label), target);
         }
     }
 
@@ -579,6 +623,31 @@ mod popup_tests {
         assert!(script.contains("window.__preload__ = true;"));
         assert!(script.contains("document.__omniExtensionsInitialized"));
         assert!(!script.contains("new Function"));
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod workspace_tests {
+    use super::workspace_taskbar_height;
+    use serde_json::json;
+
+    #[test]
+    fn taskbar_status_failures_do_not_prevent_workspace_startup() {
+        assert_eq!(
+            workspace_taskbar_height(
+                Ok(json!({ "taskbarBounds": { "height": 40.0 } })),
+                2.0,
+            ),
+            20.0
+        );
+        assert_eq!(
+            workspace_taskbar_height(Err("native request timed out".to_string()), 2.0),
+            0.0
+        );
+        assert_eq!(
+            workspace_taskbar_height(Ok(json!({})), 2.0),
+            0.0
+        );
     }
 }
 
@@ -943,16 +1012,10 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
         .lock()
         .map_err(|_| "Node.js sidecar lock is unavailable".to_string())?;
     #[cfg(target_os = "windows")]
-    let taskbar_height = {
-        let status = request_node(&mut runtime, "explorer-shell-status", json!({}))?;
-        status
-            .get("taskbarBounds")
-            .and_then(|bounds| bounds.get("height"))
-            .and_then(Value::as_f64)
-            .filter(|height| *height > 0.0)
-            .ok_or_else(|| "Windows did not report the primary taskbar bounds".to_string())?
-            / scale_factor
-    };
+    let taskbar_height = workspace_taskbar_height(
+        request_node(&mut runtime, "explorer-shell-status", json!({})),
+        scale_factor,
+    );
     #[cfg(not(target_os = "windows"))]
     let taskbar_height = 0.0;
     drop(runtime);
@@ -1037,6 +1100,32 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
         .map_err(|error| format!("Could not show the window controls: {error}"))?;
 
     force_workspace_positions(app.handle(), taskbar_height)
+}
+
+#[cfg(target_os = "windows")]
+fn workspace_taskbar_height(status: Result<Value, String>, scale_factor: f64) -> f64 {
+    let height = status.and_then(|status| {
+        status
+            .get("taskbarBounds")
+            .and_then(|bounds| bounds.get("height"))
+            .and_then(Value::as_f64)
+            .filter(|height| *height > 0.0)
+            .ok_or_else(|| "Windows did not report the primary taskbar bounds".to_string())
+    });
+
+    match height {
+        Ok(height) if scale_factor.is_finite() && scale_factor > 0.0 => height / scale_factor,
+        Ok(_) => {
+            eprintln!("[workspace] invalid monitor scale factor; using zero taskbar offset");
+            0.0
+        }
+        Err(error) => {
+            eprintln!(
+                "[workspace] could not read Explorer taskbar bounds; using zero taskbar offset: {error}"
+            );
+            0.0
+        }
+    }
 }
 
 fn request_node(runtime: &mut NodeRuntime, method: &str, payload: Value) -> Result<Value, String> {
@@ -1471,24 +1560,40 @@ fn validate_extension_storage_window(
         return Ok(());
     }
 
-    if !label.starts_with("program-extension-") {
-        return Err("Extension storage is unavailable to this window".to_string());
-    }
-
     let url = window
         .url()
-        .map_err(|error| format!("Could not read extension popup URL: {error}"))?;
-    let mut expected_url = tauri::Url::parse("http://localhost/")
-        .map_err(|error| format!("Could not prepare extension popup URL: {error}"))?;
-    expected_url
-        .path_segments_mut()
-        .map_err(|_| "Could not prepare extension popup URL".to_string())?
-        .extend(["omniscience", "extensions", extension_id, ""]);
+        .map_err(|error| format!("Could not read extension storage window URL: {error}"))?;
 
-    if !url.path().starts_with(expected_url.path()) {
-        return Err("Extension popup cannot access another extension's storage".to_string());
+    if label.starts_with("program-extension-") {
+        let mut expected_url = tauri::Url::parse("http://localhost/")
+            .map_err(|error| format!("Could not prepare extension popup URL: {error}"))?;
+        expected_url
+            .path_segments_mut()
+            .map_err(|_| "Could not prepare extension popup URL".to_string())?
+            .extend(["omniscience", "extensions", extension_id, ""]);
+
+        if !url.path().starts_with(expected_url.path()) {
+            return Err("Extension popup cannot access another extension's storage".to_string());
+        }
+        return Ok(());
     }
-    Ok(())
+
+    if is_webapp_storage_window(label, &url) {
+        return Ok(());
+    }
+
+    Err("Extension storage is unavailable to this window".to_string())
+}
+
+fn is_webapp_storage_window(label: &str, url: &tauri::Url) -> bool {
+    let has_webapp_label = label
+        .strip_prefix("program-")
+        .map(|window_id| {
+            !window_id.is_empty() && window_id.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        .unwrap_or(false);
+
+    has_webapp_label && matches!(url.scheme(), "http" | "https")
 }
 
 #[tauri::command]
@@ -1523,9 +1628,11 @@ async fn extension_storage_set(
         "window.dispatchEvent(new CustomEvent('__omniscience_extension_storage_changed__',{{detail:{payload}}}));"
     );
     for (label, popup) in app.webview_windows() {
-        if label.starts_with("program-extension-") {
+        if label.starts_with("program-") {
             if let Err(error) = popup.eval(&script) {
-                eprintln!("[extensions] could not notify popup {label} about storage changes: {error}");
+                eprintln!(
+                    "[extensions] could not notify program window {label} about storage changes: {error}"
+                );
             }
         }
     }
@@ -2344,6 +2451,39 @@ pub fn run() {
             let geometry = configure_workspace_windows(app).map_err(std::io::Error::other)?;
             app.manage(geometry);
             Ok(())
+        })
+        .on_page_load(|webview, payload| {
+            if payload.event() != PageLoadEvent::Finished {
+                return;
+            }
+
+            let target = extension_target_for_webview(webview.label());
+            let theme_settings = match current_theme_settings(webview.app_handle()) {
+                Ok(settings) => settings,
+                Err(error) => {
+                    eprintln!(
+                        "[extensions] could not load page settings for {}: {error}",
+                        webview.label()
+                    );
+                    return;
+                }
+            };
+            let script = match window_chrome_initialization_script(&theme_settings, target) {
+                Ok(script) => script,
+                Err(error) => {
+                    eprintln!(
+                        "[extensions] could not prepare page initialization for {}: {error}",
+                        webview.label()
+                    );
+                    return;
+                }
+            };
+            if let Err(error) = webview.eval(script) {
+                eprintln!(
+                    "[extensions] could not initialize webview {}: {error}",
+                    webview.label()
+                );
+            }
         })
         .on_menu_event(|app, event| {
             let Some(action) = event.id().as_ref().strip_prefix("desktop-context:") else {

@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "extension-storage"
-description = "Allows trusted app windows and extension popups to access extension storage."
+description = "Allows trusted app windows, webapps, and extension popups to access extension storage."
 commands.allow = ["extension_storage_get", "extension_storage_set"]

@@ -273,21 +273,25 @@
   }
 
   function recordWrite(el) {
+    const style = el?.style;
+    if (!style || typeof style.getPropertyValue !== 'function') return;
     lastWritten.set(el, {
-      bg: el.style.getPropertyValue('background-color'),
-      bi: el.style.getPropertyValue('background-image'),
-      c:  el.style.getPropertyValue('color'),
-      bs: el.style.getPropertyValue('box-shadow'),
+      bg: style.getPropertyValue('background-color'),
+      bi: style.getPropertyValue('background-image'),
+      c:  style.getPropertyValue('color'),
+      bs: style.getPropertyValue('box-shadow'),
     });
   }
 
   function isOurOwnStyleMutation(el) {
+    const style = el?.style;
+    if (!style || typeof style.getPropertyValue !== 'function') return false;
     const last = lastWritten.get(el);
     if (!last) return false;
-    return last.bg === el.style.getPropertyValue('background-color')
-        && last.bi === el.style.getPropertyValue('background-image')
-        && last.c  === el.style.getPropertyValue('color')
-        && last.bs === el.style.getPropertyValue('box-shadow');
+    return last.bg === style.getPropertyValue('background-color')
+        && last.bi === style.getPropertyValue('background-image')
+        && last.c  === style.getPropertyValue('color')
+        && last.bs === style.getPropertyValue('box-shadow');
   }
 
   /* ================================================================== */

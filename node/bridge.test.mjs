@@ -137,6 +137,44 @@ test('recognizes extension popups served from the Tauri app origin', async () =>
   assert.equal(eventListenCalls, 0);
 });
 
+test('omni-theme safely skips foreign DOM elements without inline style support', async () => {
+  const contentScript = await readFile(
+    new URL('../extensions/omni-theme/content.js', import.meta.url),
+    'utf8',
+  );
+  const root = { style: { setProperty() {} } };
+  const foreignElement = {
+    nodeType: 1,
+    namespaceURI: 'http://www.w3.org/2000/svg',
+  };
+  const document = {
+    documentElement: root,
+    readyState: 'complete',
+    querySelectorAll: () => [foreignElement],
+    addEventListener() {},
+  };
+  class MutationObserver {
+    observe() {}
+  }
+
+  vm.runInNewContext(contentScript, {
+    window: { addEventListener() {} },
+    document,
+    localStorage: { getItem: () => null },
+    getComputedStyle: () => ({
+      backgroundColor: 'transparent',
+      backgroundImage: 'none',
+      color: 'black',
+      boxShadow: 'none',
+      webkitBackgroundClip: '',
+      backgroundClip: '',
+      mixBlendMode: 'normal',
+    }),
+    MutationObserver,
+    console,
+  });
+});
+
 async function getAvailablePort() {
   const server = createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));

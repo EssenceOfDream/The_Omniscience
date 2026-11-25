@@ -7,6 +7,7 @@
     "trusted-app-commands",
     "extension-storage",
     "core:default",
+    "core:webview:allow-internal-toggle-devtools",
     "dialog:allow-open",
     "dialog:allow-save",
     "opener:default",
