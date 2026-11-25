@@ -546,8 +546,8 @@ mod popup_tests {
     }
 
     #[test]
-    fn extension_storage_is_limited_to_http_webapp_windows() {
-        for label in ["program-1", "program-25"] {
+    fn extension_storage_is_limited_to_http_webapp_and_popup_windows() {
+        for label in ["program-1", "program-25", "program-popup-1", "program-popup-25"] {
             for url in ["https://example.com/", "http://127.0.0.1:53808/"] {
                 assert!(
                     is_webapp_storage_window(label, &url.parse().unwrap()),
@@ -561,7 +561,7 @@ mod popup_tests {
                 "program-extension-1",
                 "http://localhost/omniscience/extensions/test/",
             ),
-            ("program-popup-1", "https://example.com/"),
+            ("program-popup-not-a-number", "https://example.com/"),
             ("component-settings", "http://localhost/"),
             ("program-1", "file:///C:/private.txt"),
         ] {
@@ -1586,8 +1586,10 @@ fn validate_extension_storage_window(
 }
 
 fn is_webapp_storage_window(label: &str, url: &tauri::Url) -> bool {
-    let has_webapp_label = label
-        .strip_prefix("program-")
+    let window_id = label
+        .strip_prefix("program-popup-")
+        .or_else(|| label.strip_prefix("program-"));
+    let has_webapp_label = window_id
         .map(|window_id| {
             !window_id.is_empty() && window_id.bytes().all(|byte| byte.is_ascii_digit())
         })

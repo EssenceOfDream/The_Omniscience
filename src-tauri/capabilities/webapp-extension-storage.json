@@ -1,10 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "webapp-extension-storage",
-  "description": "Allows webapp windows to access extension storage.",
+  "description": "Allows webapp and site-opened popup windows to access extension storage.",
   "remote": {
     "urls": ["http://*", "https://*"]
   },
-  "windows": ["program-[0-9]*"],
+  "windows": ["program-[0-9]*", "program-popup-[0-9]*"],
   "permissions": ["extension-storage"]
 }
