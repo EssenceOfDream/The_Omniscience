@@ -31,9 +31,16 @@ export function isAbsolutePath(path) {
 export function toFileUrl(path) {
 	if (!path) return path;
 	if (URL_RE.test(path)) return path;
-	let p = String(path).replace(/\\/g, '/');
-	if (!p.startsWith('/')) p = '/' + p;
-	return 'file://' + p;
+	const p = String(path).replace(/\\/g, '/');
+	if (p.startsWith('//')) {
+		const [host, ...segments] = p.slice(2).split('/');
+		return `file://${host}/${segments.map(encodeURIComponent).join('/')}`;
+	}
+	const segments = p.split('/').map((segment) => (
+		/^[a-zA-Z]:$/.test(segment) ? segment : encodeURIComponent(segment)
+	));
+	if (!p.startsWith('/')) segments.unshift('');
+	return `file://${segments.join('/')}`;
 }
 
 /**
@@ -73,6 +80,9 @@ export function resolveForDisplay(path, projectRoot) {
 	}
 	if (!isAbsolutePath(path)) {
 		path = resolveLocalPath(path, projectRoot) || path;
+	}
+	if (isAbsolutePath(path) && window.__TAURI__?.core?.convertFileSrc) {
+		return window.__TAURI__.core.convertFileSrc(path);
 	}
 	return toFileUrl(path);
 }

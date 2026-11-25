@@ -704,9 +704,6 @@ fn configure_workspace_windows(app: &mut tauri::App) -> Result<WorkspaceGeometry
     let desktop = app
         .get_webview_window("desktop")
         .ok_or_else(|| "The desktop window was not created".to_string())?;
-    desktop
-        .set_effects(Some(window_backdrop_effects()))
-        .map_err(|error| format!("Could not blur the desktop backdrop: {error}"))?;
     let (screen, scale_factor) = get_primary_screen_bounds(&desktop)?;
     let theme_settings = current_theme_settings(app.handle())?;
     let initialization_script = window_chrome_initialization_script(&theme_settings)?;

@@ -65,14 +65,15 @@ if (args[0] === 'dev') {
     `npm run preview -- --host 127.0.0.1 --port ${port} --strictPort`,
   ].join(' && ');
 
-  process.env.TAURI_CONFIG = JSON.stringify({
+  const devConfig = {
     ...existingConfig,
     build: {
       ...existingConfig.build,
       devUrl: `http://127.0.0.1:${port}`,
       beforeDevCommand,
     },
-  });
+  };
+  args.push('--config', JSON.stringify(devConfig));
   console.log(`[tauri] Using available preview port ${port}.`);
 }
 

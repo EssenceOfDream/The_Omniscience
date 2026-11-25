@@ -1,6 +1,8 @@
 import React from 'react';
 import { useSetting } from '../../../src/settings/useSettings';
-import { useProjectRoot, resolveForDisplay } from '../../../src/viewRuntime/paths';
+import {
+  useProjectRoot, isAbsolutePath, isExternalUrl, resolveForDisplay,
+} from '../../../src/viewRuntime/paths';
 
 const CUSTOM_BACKGROUNDS = {
   // 'MyCustom': React.lazy(() => import('./backgrounds/MyCustom')),
@@ -73,7 +75,8 @@ export default function BackgroundRenderer() {
   const { type, source, color, opacity, componentName } = bg;
 
   const isBundledAsset = window.__TAURI__ && typeof source === 'string' && source.startsWith('public/');
-  const src = projectRoot == null && !isBundledAsset
+  const canResolveWithoutProjectRoot = isAbsolutePath(source) || isExternalUrl(source);
+  const src = projectRoot == null && !isBundledAsset && !canResolveWithoutProjectRoot
     ? null
     : resolveForDisplay(source, projectRoot);
 

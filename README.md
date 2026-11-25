@@ -9,6 +9,7 @@ Requirements: Node.js, Rust, and the platform build tools required by Tauri.
 
 ```powershell
 npm install
+npm start
 npm run tauri -- dev
 ```
 

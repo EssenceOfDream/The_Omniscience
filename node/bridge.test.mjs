@@ -27,16 +27,38 @@ async function getAvailablePort() {
 test('resolves bundled public assets for Tauri without changing legacy file URLs', () => {
   const previousWindow = globalThis.window;
   try {
-    globalThis.window = { __TAURI__: {} };
+    globalThis.window = {
+      __TAURI__: {
+        core: {
+          convertFileSrc: (filePath) => `asset://${filePath.replace(/\\/g, '/')}`,
+        },
+      },
+    };
     assert.equal(
       resolveForDisplay('public/images/background.jpg', 'C:\\Omni'),
       '/images/background.jpg',
+    );
+    assert.equal(
+      resolveForDisplay('C:\\Wallpapers\\night sky.jpg', null),
+      'asset://C:/Wallpapers/night sky.jpg',
+    );
+    assert.equal(
+      resolveForDisplay('https://example.com/background.jpg', null),
+      'https://example.com/background.jpg',
     );
 
     globalThis.window = {};
     assert.equal(
       resolveForDisplay('public/images/background.jpg', 'C:\\Omni'),
       'file:///C:/Omni/public/images/background.jpg',
+    );
+    assert.equal(
+      resolveForDisplay('C:\\Wallpapers\\night sky#1.jpg', null),
+      'file:///C:/Wallpapers/night%20sky%231.jpg',
+    );
+    assert.equal(
+      resolveForDisplay('\\\\server\\share\\night sky.jpg', null),
+      'file://server/share/night%20sky.jpg',
     );
   } finally {
     if (previousWindow === undefined) delete globalThis.window;
