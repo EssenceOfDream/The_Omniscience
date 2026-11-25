@@ -21,12 +21,15 @@ use tauri::{
     WebviewWindowBuilder, WindowEvent,
     menu::{MenuBuilder, MenuItemBuilder},
     utils::config::WindowEffectsConfig,
+    webview::{NewWindowFeatures, NewWindowResponse, PageLoadEvent},
 };
+use tauri_plugin_opener::OpenerExt;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 static PROGRAM_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
+static POPUP_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 const WINDOW_CONTROLS_WIDTH: f64 = 104.0;
 const WINDOW_CONTROLS_HEIGHT: f64 = 62.0;
 const WINDOW_CONTROLS_BOTTOM_PADDING: f64 = 0.0;
@@ -340,9 +343,10 @@ fn window_chrome_initialization_script(theme_settings: &Value) -> Result<String,
          style.id='__omni_theme_base__';style.dataset.omniTheme='true';style.textContent=",
     );
     script.push_str(&base_css);
+    script.push_str(";(document.head||root).appendChild(style);}");
     script.push_str(
-        ";(document.head||root).appendChild(style);}\
-         if(!document.getElementById('__omni_window_border__')){const border=document.createElement('div');\
+        // This cyan outline is an intentional Omniscience feature; do not remove it.
+        "if(!document.getElementById('__omni_window_border__')){const border=document.createElement('div');\
          border.id='__omni_window_border__';border.setAttribute('aria-hidden','true');\
          Object.assign(border.style,{position:'fixed',inset:'0',border:'1px dashed #00ffff',\
          boxSizing:'border-box',pointerEvents:'none',zIndex:'2147483647'});root.appendChild(border);}\
@@ -354,6 +358,127 @@ fn window_chrome_initialization_script(theme_settings: &Value) -> Result<String,
         ";window.dispatchEvent(new CustomEvent('__omni_settings_updated__',{detail:settings}));})();",
     );
     Ok(script)
+}
+
+fn is_supported_popup_url(url: &tauri::Url) -> bool {
+    matches!(url.scheme(), "http" | "https") || (url.scheme() == "about" && url.path() == "blank")
+}
+
+fn popup_window_handler(
+    app: AppHandle,
+) -> impl Fn(tauri::Url, NewWindowFeatures) -> NewWindowResponse<tauri::Wry> + Send + 'static {
+    move |url, features| {
+        if matches!(url.scheme(), "mailto" | "tel") {
+            if let Err(error) = app.opener().open_url(url.as_str(), None::<&str>) {
+                eprintln!("[popup] could not open external URI {url}: {error}");
+            }
+            return NewWindowResponse::Deny;
+        }
+
+        if !is_supported_popup_url(&url) {
+            eprintln!("[popup] blocked unsupported URL: {url}");
+            return NewWindowResponse::Deny;
+        }
+
+        let theme_settings = match current_theme_settings(&app) {
+            Ok(settings) => settings,
+            Err(error) => {
+                eprintln!("[popup] could not read Omni Theme settings: {error}");
+                return NewWindowResponse::Deny;
+            }
+        };
+        let initialization_script = match window_chrome_initialization_script(&theme_settings) {
+            Ok(script) => script,
+            Err(error) => {
+                eprintln!("[popup] could not prepare Omni Theme: {error}");
+                return NewWindowResponse::Deny;
+            }
+        };
+
+        let id = POPUP_WINDOW_ID.fetch_add(1, Ordering::Relaxed);
+        let label = format!("program-popup-{id}");
+        let title = url.host_str().unwrap_or("Popup").to_string();
+        let app_handle = app.clone();
+        let page_load_script = initialization_script.clone();
+        let builder =
+            WebviewWindowBuilder::new(&app, label.clone(), WebviewUrl::External(url.clone()))
+                .window_features(features)
+                .title(title)
+                .devtools(true)
+                .decorations(false)
+                .transparent(true)
+                .initialization_script(initialization_script)
+                .on_page_load(move |window, event| {
+                    if event.event() != PageLoadEvent::Finished {
+                        return;
+                    }
+                    if let Err(error) = window.eval(&page_load_script) {
+                        eprintln!("[popup] could not apply Omni Theme after page load: {error}");
+                    }
+                })
+                .on_new_window(popup_window_handler(app.clone()))
+                .on_document_title_changed(|window, title| {
+                    if let Err(error) = window.set_title(&title) {
+                        eprintln!("[popup] could not update window title: {error}");
+                    }
+                });
+
+        match builder.build() {
+            Ok(window) => {
+                let event_app = app_handle.clone();
+                window.on_window_event(move |event| {
+                    if matches!(event, WindowEvent::Destroyed | WindowEvent::Focused(_)) {
+                        if let Err(error) = event_app.emit("managed-windows-changed", ()) {
+                            eprintln!("[popup] could not notify workspace about window changes: {error}");
+                        }
+                    }
+                });
+                if let Err(error) = app_handle.emit("managed-windows-changed", ()) {
+                    eprintln!("[popup] could not notify workspace about the new window: {error}");
+                }
+                NewWindowResponse::Create { window }
+            }
+            Err(error) => {
+                eprintln!("[popup] could not create window for {url}: {error}");
+                NewWindowResponse::Deny
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod popup_tests {
+    use super::{is_supported_popup_url, window_chrome_initialization_script};
+
+    #[test]
+    fn popup_url_support_is_limited_to_web_pages_and_blank_documents() {
+        for url in [
+            "https://example.com/login",
+            "http://example.com/login",
+            "about:blank",
+            "about:blank#dialog",
+        ] {
+            assert!(is_supported_popup_url(&url.parse().unwrap()), "{url}");
+        }
+
+        for url in [
+            "file:///C:/private.txt",
+            "javascript:alert(1)",
+            "tauri://localhost/index.html",
+        ] {
+            assert!(!is_supported_popup_url(&url.parse().unwrap()), "{url}");
+        }
+    }
+
+    #[test]
+    fn popup_theme_script_injects_omni_theme_and_keeps_the_cyan_border() {
+        let settings = serde_json::json!({ "enabled": true });
+        let script = window_chrome_initialization_script(&settings).unwrap();
+
+        assert!(script.contains("__omniscienceFilterInjected"));
+        assert!(script.contains("__omni_settings_updated__"));
+        assert!(script.contains("__omni_window_border__"));
+    }
 }
 
 fn get_primary_screen_bounds(window: &WebviewWindow) -> Result<(WindowBounds, f64), String> {
@@ -1895,7 +2020,8 @@ async fn open_program(
         .decorations(false)
         .transparent(true)
         .effects(window_backdrop_effects())
-        .initialization_script(script);
+        .initialization_script(script)
+        .on_new_window(popup_window_handler(app.clone()));
         let builder = if is_power_menu {
             let top = geometry.panel.y + geometry.panel.height;
             builder
@@ -1927,7 +2053,8 @@ async fn open_program(
             .decorations(false)
             .transparent(true)
             .effects(window_backdrop_effects())
-            .initialization_script(initialization_script);
+            .initialization_script(initialization_script)
+            .on_new_window(popup_window_handler(app.clone()));
         (label, builder)
     };
 
@@ -1967,7 +2094,11 @@ async fn open_program(
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .setup(|app| {
             let runtime = start_node_bridge(app.handle()).map_err(std::io::Error::other)?;
             app.manage(NodeBridge(Arc::new(Mutex::new(runtime))));

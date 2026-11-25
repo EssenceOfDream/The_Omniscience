@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "The_Omniscience"
-version = "13.2.2"
+version = "13.3.0"
 dependencies = [
  "serde",
  "serde_json",
