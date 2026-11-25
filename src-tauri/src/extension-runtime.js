@@ -254,9 +254,11 @@
         console.error(`[extensions] ${section} executor is unavailable:`, extension.id, entryIndex);
         return;
       }
-      window.chrome = api;
+      const chromeApi = window.chrome || {};
+      Object.assign(chromeApi, api);
+      window.chrome = chromeApi;
       try {
-        execute.call(window, api);
+        execute.call(window, chromeApi);
       } catch (error) {
         console.error(`[extensions] ${section} script failed:`, extension.id, error);
       }

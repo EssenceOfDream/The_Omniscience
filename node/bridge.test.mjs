@@ -62,6 +62,70 @@ test('executes preload and content scripts from their generated entry functions'
   assert.equal(window.__contentScriptRan, true);
 });
 
+test('preserves the WebView2 chrome.webview IPC bridge when installing extension APIs', async () => {
+  const runtimeTemplate = await readFile(
+    new URL('../src-tauri/src/extension-runtime.js', import.meta.url),
+    'utf8',
+  );
+  const extensions = [{
+    id: 'runtime-test',
+    targets: { webapps: true },
+    preloads: [{ matches: ['<all_urls>'], css: [] }],
+    contentScripts: [],
+  }];
+  const executorLiteral = `[{
+    preloads: [function(chrome) {
+      window.__webviewBridgePreserved = typeof chrome.webview?.postMessage === 'function';
+    }],
+    contentScripts: [],
+  }]`;
+  const script = runtimeTemplate
+    .replace('__OMNI_EXTENSION_CONFIG__', JSON.stringify(extensions))
+    .replace('__OMNI_EXTENSION_EXECUTORS__', executorLiteral)
+    .replace('__OMNI_TARGET__', '"webapps"');
+  const postedMessages = [];
+  const nativeChrome = {
+    webview: {
+      postMessage(message) {
+        postedMessages.push(message);
+      },
+    },
+  };
+  const window = {
+    chrome: nativeChrome,
+    __TAURI__: {
+      core: {
+        invoke(command) {
+          window.chrome.webview.postMessage(command);
+          return Promise.resolve({ enabled: true });
+        },
+      },
+    },
+    addEventListener() {},
+  };
+  const document = {
+    readyState: 'loading',
+    head: { appendChild() {} },
+    documentElement: {},
+    createElement: () => ({ dataset: {} }),
+    querySelector: () => null,
+    addEventListener() {},
+  };
+
+  vm.runInNewContext(script, {
+    window,
+    document,
+    location: { href: 'https://example.com/', pathname: '/' },
+    URL,
+    console,
+  });
+
+  assert.equal(window.chrome, nativeChrome);
+  assert.equal(window.__webviewBridgePreserved, true);
+  assert.equal(await window.chrome.storage.local.get('enabled').then((value) => value.enabled), true);
+  assert.deepEqual(postedMessages, ['extension_storage_get']);
+});
+
 test('recognizes extension popups served from the Tauri app origin', async () => {
   const runtimeTemplate = await readFile(
     new URL('../src-tauri/src/extension-runtime.js', import.meta.url),

@@ -521,8 +521,8 @@ fn popup_window_handler(
 #[cfg(test)]
 mod popup_tests {
     use super::{
-        build_extension_initialization_script, extension_target_for_webview, is_supported_popup_url,
-        is_webapp_storage_window, window_chrome_initialization_script,
+        build_extension_initialization_script, extension_target_for_webview,
+        is_supported_popup_url, is_webapp_storage_window, window_chrome_initialization_script,
     };
 
     #[test]
@@ -1601,23 +1601,39 @@ async fn extension_storage_set(
     app: AppHandle,
     window: WebviewWindow,
     state: State<'_, NodeBridge>,
+    theme_state: State<'_, ThemeSettingsState>,
     extension_id: String,
     items: Value,
     remove_keys: Option<Vec<String>>,
     clear: Option<bool>,
 ) -> Result<(), String> {
     validate_extension_storage_window(&window, &extension_id)?;
+    let node_bridge = Arc::clone(&state.0);
     let changes = call_node(
-        Arc::clone(&state.0),
+        Arc::clone(&node_bridge),
         "extension-storage-set".to_string(),
         json!({
-            "extensionId": extension_id,
+            "extensionId": extension_id.clone(),
             "items": items,
             "removeKeys": remove_keys.unwrap_or_default(),
             "clear": clear.unwrap_or(false),
         }),
     )
     .await?;
+
+    if extension_id == "omni-theme" {
+        let stored_settings = call_node(
+            Arc::clone(&node_bridge),
+            "extension-storage-get".to_string(),
+            json!({ "extensionId": extension_id.clone(), "keys": null }),
+        )
+        .await?;
+        let settings = call_node(node_bridge, "set-theme".to_string(), stored_settings).await?;
+        *theme_state
+            .0
+            .lock()
+            .map_err(|_| "Omni Theme settings lock is unavailable".to_string())? = settings;
+    }
 
     let payload = json!({ "extensionId": extension_id, "changes": changes });
     app.emit("extension-storage-changed", payload.clone())
@@ -2430,6 +2446,14 @@ pub fn run() {
                 .map_err(std::io::Error::other)?;
             let extension_script = build_extension_initialization_script(&extension_data)
                 .map_err(std::io::Error::other)?;
+            let has_omni_theme = extension_data
+                .as_array()
+                .map(|extensions| {
+                    extensions.iter().any(|extension| {
+                        extension.get("id").and_then(Value::as_str) == Some("omni-theme")
+                    })
+                })
+                .unwrap_or(false);
             EXTENSION_INIT_SCRIPT.set(extension_script).map_err(|_| {
                 std::io::Error::other("Chromium extensions were already initialized")
             })?;
@@ -2444,7 +2468,19 @@ pub fn run() {
                     .0
                     .lock()
                     .map_err(|_| std::io::Error::other("Node.js sidecar lock is unavailable"))?;
-                request_node(&mut runtime, "get-theme", json!({})).map_err(std::io::Error::other)?
+                let mut settings = request_node(&mut runtime, "get-theme", json!({}))
+                    .map_err(std::io::Error::other)?;
+                if has_omni_theme {
+                    let stored_settings = request_node(
+                        &mut runtime,
+                        "extension-storage-get",
+                        json!({ "extensionId": "omni-theme", "keys": null }),
+                    )
+                    .map_err(std::io::Error::other)?;
+                    settings = request_node(&mut runtime, "set-theme", stored_settings)
+                        .map_err(std::io::Error::other)?;
+                }
+                settings
             };
             app.manage(ThemeSettingsState(Mutex::new(theme_settings)));
             app.manage(ControlsCrossMode(Mutex::new(false)));
