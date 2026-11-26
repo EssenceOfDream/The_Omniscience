@@ -12,7 +12,7 @@ use std::{
 };
 
 use serde_json::{Value, json};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
