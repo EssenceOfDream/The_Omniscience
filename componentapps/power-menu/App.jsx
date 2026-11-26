@@ -73,7 +73,6 @@ export default function PowerMenu() {
         width: '100vw',
         height: '100vh',
         bgcolor: 'rgba(8,10,20,0.2)',
-        backdropFilter: 'blur(14px)',
       }}
     >
       <Paper
@@ -92,8 +91,6 @@ export default function PowerMenu() {
           backgroundImage: 'linear-gradient(145deg, rgba(255,255,255,0.1), rgba(30,30,46,0.34))',
           border: '1px solid rgba(210,190,255,0.28)',
           boxShadow: '0 24px 80px rgba(0,0,0,0.34)',
-          backdropFilter: 'blur(24px) saturate(1.35)',
-          WebkitBackdropFilter: 'blur(24px) saturate(1.35)',
         }}
       >
         <Stack direction="row" sx={{ mb: 2, alignItems: 'center' }}>

@@ -73,7 +73,7 @@ export default function WindowList({ windows = [], onFocus, onClose }) {
                 color: isActive ? '#fff' : '#ddd',
                 opacity: isHidden ? 0.7 : 1,
                 textTransform: 'none',
-                height: 24,
+                height: 23,
                 minWidth: 0,
                 maxWidth: 200,
                 fontSize: 11,

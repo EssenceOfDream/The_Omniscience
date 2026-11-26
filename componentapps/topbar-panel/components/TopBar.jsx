@@ -88,9 +88,6 @@ export default function TopBar({
     <Box sx={{
       width: '100%', height: '100%',
       bgcolor: 'rgba(0,0,0,0.55)',
-      backdropFilter: 'blur(12px)',
-      borderTop: isWindowsPanel ? '1px solid rgba(255,255,255,0.1)' : undefined,
-      borderBottom: isWindowsPanel ? undefined : '1px solid rgba(255,255,255,0.1)',
       display: 'flex',
       alignItems: isWindowsPanel ? 'center' : 'stretch',
       overflow: 'hidden',

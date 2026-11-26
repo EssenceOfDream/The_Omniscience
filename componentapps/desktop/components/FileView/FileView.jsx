@@ -851,10 +851,11 @@ function FileViewInner({ basePath }) {
             <Box
                 sx={{
                     display: 'flex', alignItems: 'center', gap: 1,
-                    px: 1.5, py: 0.75, mb: 1,
+                    px: 1.5, py: 0.75, mb: 1, mt: 0,
                     bgcolor: 'rgba(0,0,0,0.6)',
                     borderBottom: '1px solid rgba(255,255,255,0.08)',
                     maxWidth: '100%', overflow: 'hidden', flexShrink: 0,
+                    backdropFilter: 'blur(8px)',
                 }}
             >
                 <IconButton

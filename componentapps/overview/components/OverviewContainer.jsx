@@ -98,7 +98,6 @@ export default function OverviewContainer() {
         width: '100vw',
         height: '100vh',
         bgcolor: 'rgba(0,0,0,0.75)',
-        backdropFilter: 'blur(16px)',
         overflow: 'hidden',
       }}
     >

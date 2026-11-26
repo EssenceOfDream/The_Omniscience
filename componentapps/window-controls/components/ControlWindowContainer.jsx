@@ -42,7 +42,6 @@ export default function ControlWindowContainer() {
       justifyContent: 'center',
       overflow: 'hidden',
       background: 'rgba(0,0,0,0.42)',
-      backdropFilter: 'blur(8px)',
     }}>
       <ControlGrid
         activeWindow={activeWindow}

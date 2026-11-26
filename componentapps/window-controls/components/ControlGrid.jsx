@@ -26,7 +26,7 @@ import ViewWeekIcon from '@mui/icons-material/ViewWeek';
 
 const CELL = 20;
 const GAP = 1;
-const MIN_W = 120;
+const MIN_W = 124;
 const MIN_H = 72;
 
 const CURSORS = {

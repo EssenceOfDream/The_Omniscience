@@ -113,7 +113,6 @@ export default function DevelopmentHostMenu() {
         p: 2,
         boxSizing: 'border-box',
         bgcolor: 'rgba(0,0,0,0.18)',
-        backdropFilter: 'blur(6px)',
       }}
     >
       <Paper
@@ -136,9 +135,7 @@ export default function DevelopmentHostMenu() {
             `linear-gradient(145deg, ${theme.palette.primary.light}, ${theme.palette.background.paper})`
           ),
           border: (theme) => `1px solid ${theme.palette.primary.light}`,
-          boxShadow: '0 24px 72px rgba(0,0,0,0.3)',
-          backdropFilter: 'blur(24px) saturate(1.25)',
-          WebkitBackdropFilter: 'blur(24px) saturate(1.25)',
+          boxShadow: '0 24px 68px rgba(0,0,0,0.3)',
         }}
       >
         <Stack direction="row" alignItems="center" spacing={1.5}>

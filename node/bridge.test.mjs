@@ -333,7 +333,7 @@ test('reserves and releases the workspace panel work area', async () => {
 
   assert.equal(await handleRequest({
     method: 'set-shell-panel-dock',
-    payload: { hwnd: '1234', x: 120, y: 48, width: 1400, height: 28 },
+    payload: { hwnd: '1234', x: 123, y: 48, width: 1397, height: 28 },
   }, context), true);
   assert.equal(await handleRequest({
     method: 'remove-shell-panel-dock',
@@ -342,7 +342,7 @@ test('reserves and releases the workspace panel work area', async () => {
   assert.deepEqual(requests, [
     {
       action: 'dock',
-      payload: { hwnd: '1234', x: 120, y: 48, width: 1400, height: 28, edge: 'top' },
+      payload: { hwnd: '1234', x: 123, y: 48, width: 1397, height: 28, edge: 'top' },
     },
     { action: 'dock-remove', payload: { hwnd: '1234' } },
   ]);
