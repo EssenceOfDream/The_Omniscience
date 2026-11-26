@@ -2,44 +2,15 @@ import path from 'node:path';
 import { Script } from 'node:vm';
 import {
   lstat,
-  mkdir,
   readFile,
-  readdir,
-  writeFile,
 } from 'node:fs/promises';
 
 import DEFAULT_EXTENSION_TARGETS from './DEFAULT_EXTENSION_TARGETS.mjs';
 
-export function extensionDirectory(projectRoot, extensionId) {
-  if (typeof extensionId !== 'string'
-    || !extensionId
-    || path.basename(extensionId) !== extensionId
-    || extensionId.startsWith('.')
-    || /[<>:"/\\|?*\u0000-\u001f]/.test(extensionId)) {
-    throw new Error('Invalid extension id');
-  }
-  return path.join(projectRoot, 'extensions', extensionId);
-}
+import extensionDirectory from './extensionDirectory.mjs';
+import readExtensionFile from './readExtensionFile.mjs';
 
-export async function readExtensionFile(directory, relativePath) {
-  if (typeof relativePath !== 'string'
-    || !relativePath
-    || relativePath.includes('\\')
-    || path.posix.isAbsolute(relativePath)
-    || relativePath.split('/').some((part) => !part || part === '.' || part === '..')) {
-    throw new Error('Invalid extension resource path');
-  }
-  const filePath = path.resolve(directory, ...relativePath.split('/'));
-  const relative = path.relative(directory, filePath);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error('Extension resource path escapes its extension directory');
-  }
-  const info = await lstat(filePath);
-  if (!info.isFile()) throw new Error(`Extension resource is not a file: ${relativePath}`);
-  return readFile(filePath, 'utf8');
-}
-
-export async function loadExtension(projectRoot, extensionId, { includeSources = false } = {}) {
+export default async function(projectRoot, extensionId, { includeSources = false } = {}) {
   const directory = extensionDirectory(projectRoot, extensionId);
   const manifestPath = path.join(directory, 'manifest.json');
   if (!(await lstat(manifestPath)).isFile()) {
@@ -163,93 +134,4 @@ export async function loadExtension(projectRoot, extensionId, { includeSources =
     })),
     contentScripts: includeSources ? contentScripts : undefined,
   };
-}
-
-export async function listExtensions(projectRoot) {
-  const root = path.join(projectRoot, 'extensions');
-  let entries;
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch (error) {
-    if (error.code === 'ENOENT') return [];
-    throw error;
-  }
-  const extensions = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
-    try {
-      const extension = await loadExtension(projectRoot, entry.name);
-      extensions.push({
-        id: extension.id,
-        extensionId: extension.id,
-        title: extension.title,
-        name: extension.name,
-        type: 'extension',
-        kind: 'extension',
-        launchable: Boolean(extension.popup),
-        version: extension.version,
-        description: extension.description,
-        icon: extension.icon,
-      });
-    } catch (error) {
-      console.error(`[extensions] failed to load ${entry.name}:`, error);
-    }
-  }
-  return extensions.sort((left, right) => left.title.localeCompare(right.title));
-}
-
-export async function getExtensionRuntime(projectRoot) {
-  const extensions = await listExtensions(projectRoot);
-  return Promise.all(extensions.map(({ id }) =>
-    loadExtension(projectRoot, id, { includeSources: true })));
-}
-
-export function extensionStoragePath(context, extensionId) {
-  const defaultDirectory = process.env.APPDATA
-    ? path.join(process.env.APPDATA, 'The_Omniscience', 'extensions')
-    : path.join(os.homedir(), '.the-omniscience', 'extensions');
-  return path.join(
-    context.extensionStoragePath ?? defaultDirectory,
-    `${extensionId}.json`,
-  );
-}
-
-export async function readExtensionStorage(context, extensionId) {
-  await loadExtension(context.projectRoot, extensionId);
-  try {
-    const contents = await readFile(extensionStoragePath(context, extensionId), 'utf8');
-    const values = JSON.parse(contents);
-    if (!values || typeof values !== 'object' || Array.isArray(values)) {
-      throw new Error(`Invalid stored data for extension ${extensionId}`);
-    }
-    return values;
-  } catch (error) {
-    if (error.code === 'ENOENT') return {};
-    throw error;
-  }
-}
-
-export async function writeExtensionStorage(context, extensionId, items, removeKeys = [], clear = false) {
-  if (!items || typeof items !== 'object' || Array.isArray(items)) {
-    throw new Error('Extension storage items must be an object');
-  }
-  const oldValues = await readExtensionStorage(context, extensionId);
-  const newValues = clear ? {} : { ...oldValues, ...items };
-  for (const key of removeKeys) delete newValues[key];
-  for (const [key, value] of Object.entries(items)) {
-    if (value === undefined) delete newValues[key];
-  }
-  const storageFile = extensionStoragePath(context, extensionId);
-  await mkdir(path.dirname(storageFile), { recursive: true });
-  await writeFile(storageFile, JSON.stringify(newValues), 'utf8');
-  const changes = {};
-  const changedKeys = new Set([...Object.keys(items), ...removeKeys, ...(clear ? Object.keys(oldValues) : [])]);
-  for (const key of changedKeys) {
-    if (Object.hasOwn(oldValues, key) && Object.hasOwn(newValues, key)
-      && JSON.stringify(oldValues[key]) === JSON.stringify(newValues[key])) continue;
-    changes[key] = {};
-    if (Object.hasOwn(newValues, key)) changes[key].newValue = newValues[key];
-    if (Object.hasOwn(oldValues, key)) changes[key].oldValue = oldValues[key];
-  }
-  return changes;
 }

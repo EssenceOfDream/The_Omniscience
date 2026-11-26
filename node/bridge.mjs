@@ -50,13 +50,11 @@ import contentTypes from './contentTypes.mjs';
 
 export {DEFAULT_THEME_SETTINGS};
 
-import {
-  loadExtension,
-  listExtensions,
-  getExtensionRuntime,
-  readExtensionStorage,
-  writeExtensionStorage
-} from './extensions.mjs';
+import loadExtension from './loadExtension.mjs';
+import listExtensions from './listExtensions.mjs';
+import getExtensionRuntime from './getExtensionRuntime.mjs';
+import readExtensionStorage from './readExtensionStorage.mjs';
+import writeExtensionStorage from './writeExtensionStorage.mjs';
 
 import {
   getWindowsIcons,
