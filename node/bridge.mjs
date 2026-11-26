@@ -42,13 +42,11 @@ import {
   listComponentAppSources,
 } from '../main/componentapps.js';
 
-import {
-  categories,
-  windowsUwpHostPath,
-  windowsSettingsCategories,
-  DEFAULT_THEME_SETTINGS,
-  contentTypes
-} from './constants.mjs';
+import categories from './categories.mjs';
+import windowsUwpHostPath from './windowsUwpHostPath.mjs';
+import windowsSettingsCategories from './windowsSettingsCategories.mjs';
+import DEFAULT_THEME_SETTINGS from './DEFAULT_THEME_SETTINGS.mjs';
+import contentTypes from './contentTypes.mjs';
 
 export {DEFAULT_THEME_SETTINGS};
 

@@ -8,7 +8,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 
-import {DEFAULT_EXTENSION_TARGETS} from './constants.mjs';
+import DEFAULT_EXTENSION_TARGETS from './DEFAULT_EXTENSION_TARGETS.mjs';
 
 export function extensionDirectory(projectRoot, extensionId) {
   if (typeof extensionId !== 'string'

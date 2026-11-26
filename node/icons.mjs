@@ -5,10 +5,8 @@ import {
   stat,
 } from 'node:fs/promises';
 
-import {
-  defaultWindowsIconState,
-  windowsAppIconHostPath
-} from './constants.mjs';
+import defaultWindowsIconState from './defaultWindowsIconState.mjs';
+import windowsAppIconHostPath from './windowsAppIconHostPath.mjs';
 
 import {absoluteFilePath} from './fs.mjs';
 

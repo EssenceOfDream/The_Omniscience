@@ -1,0 +1,1 @@
+export default ['componentapps', 'webapps', 'extensions'];
