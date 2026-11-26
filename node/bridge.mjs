@@ -22,7 +22,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { promisify } from 'node:util';
 import { Script } from 'node:vm';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 import wifi from 'node-wifi';
 import { spawn as spawnPty } from '@lydell/node-pty';
@@ -43,14 +43,19 @@ import {
   listComponentAppSources,
 } from '../main/componentapps.js';
 
-const categories = ['componentapps', 'webapps', 'extensions'];
-const DEFAULT_EXTENSION_TARGETS = Object.freeze({
-  webapps: true,
-  componentapps: true,
-  extensions: false,
-  shell: false,
-  devtools: false,
-});
+import {
+  categories,
+  DEFAULT_EXTENSION_TARGETS,
+  defaultWindowsIconState,
+  windowsUwpHostPath,
+  windowsAppIconHostPath,
+  windowsSettingsCategories,
+  DEFAULT_THEME_SETTINGS,
+  contentTypes
+} from './constants.mjs';
+
+export {DEFAULT_THEME_SETTINGS};
+
 const execFileAsync = promisify(execFile);
 const terminalSessions = new Map();
 const minServers = new Map();
@@ -58,61 +63,6 @@ let desktopClipboardPaths = [];
 let desktopCutPaths = [];
 let activeArchiverJob = null;
 let wifiInitialized = false;
-const defaultWindowsIconState = {
-  cache: new Map(),
-  pending: new Map(),
-  queued: new Map(),
-  flushScheduled: false,
-};
-const windowsUwpHostPath = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../main/windowsUwpHost.ps1',
-);
-const windowsAppIconHostPath = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../main/windowsAppIcons.ps1',
-);
-const windowsSettingsCategories = Object.freeze({
-  system: ['sysdm.cpl'],
-  devices: ['printers'],
-  network: ['ncpa.cpl'],
-  personalization: ['/name', 'Microsoft.Personalization'],
-  apps: ['appwiz.cpl'],
-  accounts: ['/name', 'Microsoft.UserAccounts'],
-  timeLanguage: ['intl.cpl'],
-  gaming: ['joy.cpl'],
-  accessibility: ['/name', 'Microsoft.EaseOfAccessCenter'],
-  search: ['/name', 'Microsoft.IndexingOptions'],
-  privacy: ['inetcpl.cpl'],
-  update: ['/name', 'Microsoft.WindowsUpdate'],
-});
-export const DEFAULT_THEME_SETTINGS = Object.freeze({
-  enabled: true,
-  maxR: 128,
-  maxG: 0,
-  maxB: 128,
-  targetAlpha: 0.25,
-  textBrightness: 255,
-  blurShadow: 8,
-  shadowColor: '#ff00ff',
-});
-
-const contentTypes = new Map([
-  ['.css', 'text/css; charset=utf-8'],
-  ['.html', 'text/html; charset=utf-8'],
-  ['.webp', 'image/webp'],
-  ['.ico', 'image/x-icon'],
-  ['.jpeg', 'image/jpeg'],
-  ['.jpg', 'image/jpeg'],
-  ['.js', 'text/javascript; charset=utf-8'],
-  ['.json', 'application/json; charset=utf-8'],
-  ['.png', 'image/png'],
-  ['.svg', 'image/svg+xml'],
-  ['.woff', 'font/woff'],
-  ['.woff2', 'font/woff2'],
-  ['.ttf', 'font/ttf'],
-  ['.otf', 'font/otf'],
-]);
 
 async function hasBuiltProgram(projectRoot, category, name) {
   const relativePath = path.join(category, name, 'index.html');
