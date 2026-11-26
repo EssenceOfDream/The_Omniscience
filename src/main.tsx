@@ -43,7 +43,7 @@ function Desktop() {
       </div>
       <div
         id="desktop-root"
-        style={{ position: 'fixed', top: 72, left: 0, right: 0, bottom: 0, zIndex: 1 }}
+        style={{ position: 'fixed', top: 68, left: 0, right: 0, bottom: 0, zIndex: 1 }}
       >
         <ThemeProvider theme={darkTheme}>
           <CssBaseline />
