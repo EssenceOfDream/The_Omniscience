@@ -1230,17 +1230,53 @@ test('prepares drags for visible native windows at their matching cursor positio
     payload: { hwnd: '302', mode: 'resize', direction: 'se' },
   });
 
-  await assert.rejects(
-    handleRequest({
-      method: 'set-cursor-position',
-      payload: { x: -40, y: 210 },
-    }, context),
-    /Unknown Node.js sidecar method/,
-  );
   assert.deepEqual(requests.at(-1), {
     action: 'prepare-drag',
     payload: { hwnd: '302', mode: 'resize', direction: 'se' },
   });
+});
+
+test('starts atomic native drag sessions for application windows', async () => {
+  const requests = [];
+  const context = {
+    projectRoot: 'C:\\Omniscience',
+    platform: 'win32',
+    nativeWindowHost: {
+      async request(action, payload) {
+        requests.push({ action, payload });
+        return {
+          x: 100,
+          y: 120,
+          width: 800,
+          height: 600,
+          cursorX: 899,
+          cursorY: 719,
+          nativeDrag: true,
+        };
+      },
+    },
+  };
+
+  const drag = await handleRequest({
+    method: 'prepare-program-window-drag',
+    payload: { hwnd: '4321', mode: 'resize', direction: 'se' },
+  }, context);
+
+  assert.deepEqual(drag, {
+    ok: true,
+    bounds: { x: 100, y: 120, width: 800, height: 600 },
+    cursor: { x: 899, y: 719 },
+    nativeDrag: true,
+  });
+  assert.deepEqual(requests, [{
+    action: 'prepare-drag',
+    payload: { hwnd: '4321', mode: 'resize', direction: 'se' },
+  }]);
+
+  await assert.rejects(handleRequest({
+    method: 'prepare-program-window-drag',
+    payload: { hwnd: '4321', mode: 'resize', direction: 'invalid' },
+  }, context), /Unsupported program-window resize direction/);
 });
 
 test('reports when hidden-window enumeration is unavailable off Windows', async () => {

@@ -283,33 +283,6 @@ pub(crate) fn request_node(
         .ok_or_else(|| "Node.js sidecar response is missing its result".to_string())
 }
 
-pub(crate) fn set_cursor_position(x: i32, y: i32) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        unsafe {
-            windows::Win32::UI::WindowsAndMessaging::SetCursorPos(x, y)
-                .map_err(|error| format!("Could not move the cursor: {error}"))
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (x, y);
-        Err("Cursor positioning is only supported on Windows".to_string())
-    }
-}
-
-fn cursor_coordinates(payload: &Value) -> Result<(i32, i32), String> {
-    let coordinate = |axis| {
-        payload
-            .get(axis)
-            .and_then(Value::as_i64)
-            .and_then(|value| i32::try_from(value).ok())
-            .ok_or_else(|| "Cursor coordinates must be valid 32-bit integers".to_string())
-    };
-    Ok((coordinate("x")?, coordinate("y")?))
-}
-
 pub(crate) async fn call_node(
     runtime: Arc<Mutex<NodeRuntime>>,
     method: String,
@@ -325,23 +298,6 @@ pub(crate) async fn call_node(
     .map_err(|error| format!("Node.js sidecar task failed: {error}"))?
 }
 
-#[cfg(test)]
-mod tests {
-    use super::cursor_coordinates;
-    use serde_json::json;
-
-    #[test]
-    fn cursor_coordinates_accept_signed_32_bit_values_and_reject_invalid_numbers() {
-        assert_eq!(
-            cursor_coordinates(&json!({ "x": i32::MIN, "y": i32::MAX })).unwrap(),
-            (i32::MIN, i32::MAX)
-        );
-        assert!(cursor_coordinates(&json!({ "x": 0, "y": 2147483648_i64 })).is_err());
-        assert!(cursor_coordinates(&json!({ "x": 1.5, "y": 0 })).is_err());
-        assert!(cursor_coordinates(&json!({ "x": 0 })).is_err());
-    }
-}
-
 #[tauri::command]
 pub(crate) async fn node_request(
     app: AppHandle,
@@ -352,12 +308,10 @@ pub(crate) async fn node_request(
     if let Some(result) = filesystem::dispatch(&method, &payload)? {
         return Ok(result);
     }
+    if method == "prepare-program-window-drag" {
+        return Err("This internal window drag method is not directly available".to_string());
+    }
     match method.as_str() {
-        "set-cursor-position" => {
-            let (x, y) = cursor_coordinates(&payload)?;
-            set_cursor_position(x, y)?;
-            return Ok(json!({ "ok": true }));
-        }
         "open-path" => return open_file_path::open_file_path(&app, &payload),
         "open-with" => return open_with::open_with(&payload),
         "reveal-path" => return reveal_file_path::reveal_file_path(&app, &payload),

@@ -279,64 +279,75 @@ pub(crate) async fn prepare_program_window_drag(
     mode: String,
     direction: Option<String>,
 ) -> Result<Value, String> {
+    if mode != "move" && mode != "resize" {
+        return Err("Invalid window drag mode or resize direction".to_string());
+    }
+    if mode == "resize"
+        && !matches!(
+            direction.as_deref(),
+            Some("nw" | "n" | "ne" | "w" | "e" | "sw" | "s" | "se")
+        )
+    {
+        return Err("Invalid window drag mode or resize direction".to_string());
+    }
     let window = get_program_window(&app, &label)?;
-    window
-        .set_focus()
-        .map_err(|error| format!("Could not focus {label} before dragging: {error}"))?;
-    let position = window
-        .outer_position()
-        .map_err(|error| format!("Could not read window position: {error}"))?;
-    let size = window
-        .outer_size()
-        .map_err(|error| format!("Could not read window size: {error}"))?;
-    let width = i32::try_from(size.width)
-        .map_err(|_| "Window width is outside the supported range".to_string())?;
-    let height = i32::try_from(size.height)
-        .map_err(|_| "Window height is outside the supported range".to_string())?;
-    if width <= 0 || height <= 0 {
-        return Err("Window has invalid bounds".to_string());
-    }
 
-    let right = position.x + width - 1;
-    let bottom = position.y + height - 1;
-    let center_x = position.x + width / 2;
-    let center_y = position.y + height / 2;
-    let cursor = match (mode.as_str(), direction.as_deref()) {
-        ("move", _) => (center_x, position.y + 20.min((height / 3).max(1))),
-        ("resize", Some("nw")) => (position.x, position.y),
-        ("resize", Some("n")) => (center_x, position.y),
-        ("resize", Some("ne")) => (right, position.y),
-        ("resize", Some("e")) => (right, center_y),
-        ("resize", Some("se")) => (right, bottom),
-        ("resize", Some("s")) => (center_x, bottom),
-        ("resize", Some("sw")) => (position.x, bottom),
-        ("resize", Some("w")) => (position.x, center_y),
-        _ => return Err("Invalid window drag mode or resize direction".to_string()),
-    };
-    let scale_factor = window
-        .scale_factor()
-        .map_err(|error| format!("Could not read window scale: {error}"))?;
-    let logical_position = position.to_logical::<f64>(scale_factor);
-    let logical_size = size.to_logical::<f64>(scale_factor);
-    let mut response = json!({
-        "ok": true,
-        "bounds": {
-            "x": logical_position.x,
-            "y": logical_position.y,
-            "width": logical_size.width,
-            "height": logical_size.height
+    #[cfg(target_os = "windows")]
+    {
+        let hwnd = window
+            .hwnd()
+            .map_err(|error| format!("Could not read the {label} window handle: {error}"))?
+            .0 as usize;
+        if hwnd == 0 {
+            return Err(format!("The {label} window has an invalid handle"));
         }
-    });
-
-    if cfg!(target_os = "windows") {
-        crate::node::set_cursor_position(cursor.0, cursor.1)?;
-        response["cursor"] = json!({
-            "x": cursor.0 as f64 / scale_factor,
-            "y": cursor.1 as f64 / scale_factor
-        });
+        let runtime = app
+            .try_state::<crate::node::NodeBridge>()
+            .ok_or_else(|| "Node.js sidecar is unavailable".to_string())?;
+        return call_node(
+            Arc::clone(&runtime.0),
+            "prepare-program-window-drag".to_string(),
+            json!({
+                "hwnd": hwnd.to_string(),
+                "mode": mode,
+                "direction": direction.unwrap_or_default(),
+            }),
+        )
+        .await;
     }
 
-    Ok(response)
+    #[cfg(not(target_os = "windows"))]
+    {
+        window
+            .set_focus()
+            .map_err(|error| format!("Could not focus {label} before dragging: {error}"))?;
+        let position = window
+            .outer_position()
+            .map_err(|error| format!("Could not read window position: {error}"))?;
+        let size = window
+            .outer_size()
+            .map_err(|error| format!("Could not read window size: {error}"))?;
+        if size.width == 0 || size.height == 0 {
+            return Err("Window has invalid bounds".to_string());
+        }
+
+        let scale_factor = window
+            .scale_factor()
+            .map_err(|error| format!("Could not read window scale: {error}"))?;
+        let logical_position = position.to_logical::<f64>(scale_factor);
+        let logical_size = size.to_logical::<f64>(scale_factor);
+        let response = json!({
+            "ok": true,
+            "bounds": {
+                "x": logical_position.x,
+                "y": logical_position.y,
+                "width": logical_size.width,
+                "height": logical_size.height
+            }
+        });
+
+        Ok(response)
+    }
 }
 
 #[tauri::command]

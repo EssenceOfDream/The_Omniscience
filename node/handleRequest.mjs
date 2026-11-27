@@ -78,6 +78,37 @@ export default async function (request, context) {
   if (request?.method === 'prepare-native-window-drag') {
     return prepareNativeWindowDrag(request.payload, context);
   }
+  if (request?.method === 'prepare-program-window-drag') {
+    const { hwnd, mode, direction } = request.payload ?? {};
+    if (typeof hwnd !== 'string' || !/^[1-9]\d*$/.test(hwnd)) {
+      throw new Error('A valid program-window handle is required');
+    }
+    if (mode !== 'move' && mode !== 'resize') {
+      throw new Error('Unsupported program-window drag mode');
+    }
+    const resizeDirections = ['nw', 'n', 'ne', 'w', 'e', 'sw', 's', 'se'];
+    if (mode === 'resize' && !resizeDirections.includes(direction)) {
+      throw new Error('Unsupported program-window resize direction');
+    }
+
+    const result = await getWindowsNativeHost(context).request('prepare-drag', {
+      hwnd,
+      mode,
+      direction: direction ?? '',
+    });
+    if (!result) return { ok: false, abort: true };
+    return {
+      ok: true,
+      bounds: {
+        x: result.x,
+        y: result.y,
+        width: result.width,
+        height: result.height,
+      },
+      cursor: { x: result.cursorX, y: result.cursorY },
+      nativeDrag: Boolean(result.nativeDrag),
+    };
+  }
   if (request?.method === 'explorer-shell-status') {
     return getExplorerShellStatus(context);
   }
