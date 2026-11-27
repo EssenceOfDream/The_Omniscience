@@ -1,9 +1,6 @@
 import path from 'node:path';
 import { openEverything } from '../main/everythingSearch.js';
 import getExtensionRuntime from './getExtensionRuntime.mjs';
-import openFilePath from './openFilePath.mjs';
-import openFileWith from './openFileWith.mjs';
-import revealFilePath from './revealFilePath.mjs';
 import openWindowsSettingsCategory from './openWindowsSettingsCategory.mjs';
 import listNativeApps from './listNativeApps.mjs';
 import launchNativeApp from './launchNativeApp.mjs';
@@ -22,7 +19,6 @@ import setDesktopClipboard from './setDesktopClipboard.mjs';
 import getDesktopClipboard from './getDesktopClipboard.mjs';
 import pasteDesktopClipboard from './pasteDesktopClipboard.mjs';
 import dropFilePaths from './dropFilePaths.mjs';
-import writeDroppedFiles from './writeDroppedFiles.mjs';
 import getWindowsNativeHost from './getWindowsNativeHost.mjs';
 import getWindowsIcons from './getWindowsIcons.mjs';
 import { state } from './state.mjs';
@@ -111,20 +107,8 @@ export default async function (request, context) {
     await openEverything();
     return { opened: true };
   }
-  if (request?.method === 'open-path') {
-    return openFilePath(request.payload, context);
-  }
-  if (request?.method === 'open-with') {
-    return openFileWith(request.payload, context);
-  }
   if (request?.method === 'drop-paths') {
     return dropFilePaths(request.payload);
-  }
-  if (request?.method === 'write-dropped-files') {
-    return writeDroppedFiles(request.payload);
-  }
-  if (request?.method === 'reveal-path') {
-    return revealFilePath(request.payload, context);
   }
   if (request?.method === 'copy-files' || request?.method === 'cut-files') {
     return setDesktopClipboard(

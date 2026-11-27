@@ -62,10 +62,11 @@ On Windows, file icons are extracted through a persistent, prewarmed helper and
 cached for the lifetime of the sidecar, avoiding a PowerShell startup for every
 icon batch.
 The **Files** section uses the Rust host for directory navigation and listing,
-user-directory lookup, file/folder creation, rename, delete, and parent path
-resolution. It can also open componentapps with the supported frontend
-entrypoints in frameless Tauri windows. Creation and rename refuse to replace
-existing entries.
+user-directory lookup, file/folder creation, rename, delete, parent path
+resolution, opening and revealing paths, and writing dropped file data without
+overwriting existing entries. It can also open componentapps with the supported
+frontend entrypoints in frameless Tauri windows. Creation and rename refuse to
+replace existing entries.
 The **Appearance** section configures the bundled `omni-theme` extension. Its
 Manifest V3 content scripts apply the existing color-processing engine to the
 shell and matching program windows.

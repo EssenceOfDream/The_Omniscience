@@ -9,6 +9,7 @@ mod parent_directory;
 mod read_desktop_directory;
 mod rename_entry;
 mod safe_entry_name;
+mod write_dropped_files;
 
 use serde_json::Value;
 
@@ -32,6 +33,7 @@ pub(super) fn dispatch(method: &str, payload: &Value) -> Result<Option<Value>, S
         "rename-path" => rename_entry::rename_entry(payload).map(Some),
         "delete-path" => delete_path::delete_path(payload).map(Some),
         "parent-directory" => parent_directory::parent_directory(payload).map(Some),
+        "write-dropped-files" => write_dropped_files::write_dropped_files(payload).map(Some),
         _ => return Ok(None),
     };
     result

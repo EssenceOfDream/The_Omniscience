@@ -932,66 +932,6 @@ test('browser webapp redirects to Google', async () => {
   assert.match(redirectPage, /window\.location\.href\s*=\s*['"]https:\/\/www\.google\.com['"]/);
 });
 
-test('opens desktop shortcuts through the Windows shell instead of opener path scope', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-desktop-shortcut-'));
-  const shortcutPath = path.join(root, 'CODERROR.lnk');
-  const requests = [];
-  try {
-    await writeFile(shortcutPath, 'shortcut');
-    const result = await handleRequest({
-      method: 'open-path',
-      payload: { path: shortcutPath },
-    }, {
-      projectRoot: root,
-      platform: 'win32',
-      nativeWindowHost: {
-        async request(action, payload) {
-          requests.push({ action, payload });
-          return true;
-        },
-      },
-    });
-    assert.deepEqual(result, { opened: true });
-    assert.deepEqual(requests, [{
-      action: 'open-path',
-      payload: { path: shortcutPath },
-    }]);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('opens the Windows Open With dialog for the selected file', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-desktop-open-with-'));
-  const filePath = path.join(root, 'sample.unknown');
-  const spawns = [];
-  try {
-    await writeFile(filePath, 'content');
-    const result = await handleRequest({
-      method: 'open-with',
-      payload: { path: filePath },
-    }, {
-      platform: 'win32',
-      projectRoot: root,
-      spawnProcess(executable, args, options) {
-        spawns.push({ executable, args, options });
-        const child = new EventEmitter();
-        child.unref = () => {};
-        process.nextTick(() => child.emit('spawn'));
-        return child;
-      },
-    });
-    assert.deepEqual(result, { opened: true });
-    assert.deepEqual(spawns, [{
-      executable: 'rundll32.exe',
-      args: ['shell32.dll,OpenAs_RunDLL', filePath],
-      options: { detached: true, stdio: 'ignore' },
-    }]);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 test('copies, cuts, and pastes desktop files without overwriting existing entries', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'omni-desktop-clipboard-'));
   const source = path.join(root, 'source');
@@ -1074,7 +1014,7 @@ test('uses the Windows file clipboard for desktop copy and paste', async () => {
   }
 });
 
-test('copies native dropped files and writes inline dropped files without overwriting', async () => {
+test('copies native dropped files without overwriting', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'omni-desktop-drop-'));
   const sourceDirectory = path.join(root, 'source');
   const destination = path.join(root, 'destination');
@@ -1090,15 +1030,6 @@ test('copies native dropped files and writes inline dropped files without overwr
     assert.equal(dropped.success, true);
     assert.equal(await readFile(source, 'utf8'), 'native');
 
-    const inline = await handleRequest({
-      method: 'write-dropped-files',
-      payload: {
-        dir: destination,
-        files: [{ name: 'sample.txt', data: Array.from(Buffer.from('inline')) }],
-      },
-    }, root);
-    assert.equal(inline.success, true);
-    assert.equal(await readFile(path.join(destination, 'sample (1).txt'), 'utf8'), 'inline');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1481,6 +1412,10 @@ test('does not expose filesystem methods now handled by the Rust host', async ()
     'open-extension-popup',
     'get-file-icon',
     'get-file-icons',
+    'open-path',
+    'open-with',
+    'reveal-path',
+    'write-dropped-files',
   ]) {
     await assert.rejects(
       handleRequest({ method, payload: {} }, 'C:\\Omniscience'),
