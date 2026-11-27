@@ -545,6 +545,7 @@ while ($null -ne ($line = $reader.ReadLine())) {
             'machine-shell-restore'    { Invoke-MachineShellPolicyAction $request }
             'machine-winlogon-restore' { Invoke-MachineWinlogonShellAction $request }
             'explorer-shell-status'    { [OmniWin32]::GetExplorerShellStatus() }
+            'explorer-fullscreen-status' { [OmniWin32]::IsForegroundFullscreenOnTaskbarMonitor([long]$request.excludedWindowHandle) }
             'explorer-shell-start'     { [OmniWin32]::StartExplorerShell() }
             default { throw "Unsupported native action: $($request.action)" }
         }

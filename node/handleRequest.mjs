@@ -112,6 +112,9 @@ export default async function (request, context) {
   if (request?.method === 'explorer-shell-status') {
     return getExplorerShellStatus(context);
   }
+  if (request?.method === 'explorer-fullscreen-status') {
+    return getWindowsNativeHost(context).request('explorer-fullscreen-status', request.payload);
+  }
   if (request?.method === 'set-shell-window-layer') {
     return setShellWindowLayer(request.payload, context);
   }

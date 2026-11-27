@@ -1039,6 +1039,39 @@ public static class OmniWin32
         };
     }
 
+    public static bool IsForegroundFullscreenOnTaskbarMonitor(long excludedWindowHandle)
+    {
+        IntPtr taskbar = FindWindow("Shell_TrayWnd", null);
+        IntPtr foreground = GetForegroundWindow();
+        if (taskbar == IntPtr.Zero)
+            throw new InvalidOperationException("Explorer taskbar window was not found");
+        if (foreground == IntPtr.Zero || foreground.ToInt64() == excludedWindowHandle
+            || !IsWindowVisible(foreground) || IsIconic(foreground))
+            return false;
+
+        IntPtr taskbarMonitor = MonitorFromWindow(taskbar, MONITOR_DEFAULTTONEAREST);
+        if (taskbarMonitor == IntPtr.Zero)
+            throw new InvalidOperationException("Could not locate the Explorer taskbar monitor");
+        if (MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST) != taskbarMonitor)
+            return false;
+
+        MONITORINFO monitorInfo = new MONITORINFO {
+            cbSize = Marshal.SizeOf(typeof(MONITORINFO))
+        };
+        RECT windowBounds;
+        if (!GetMonitorInfo(taskbarMonitor, ref monitorInfo))
+            throw new InvalidOperationException("Could not read the Explorer taskbar monitor bounds");
+        if (!GetWindowRect(foreground, out windowBounds))
+            throw new InvalidOperationException("Could not read the foreground window bounds");
+
+        const int edgeTolerance = 2;
+        RECT monitorBounds = monitorInfo.rcMonitor;
+        return windowBounds.Left <= monitorBounds.Left + edgeTolerance
+            && windowBounds.Top <= monitorBounds.Top + edgeTolerance
+            && windowBounds.Right >= monitorBounds.Right - edgeTolerance
+            && windowBounds.Bottom >= monitorBounds.Bottom - edgeTolerance;
+    }
+
     public static bool StartExplorerShell()
     {
         ShellWindowState state = GetExplorerShellState();

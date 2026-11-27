@@ -1289,6 +1289,29 @@ test('reports when hidden-window enumeration is unavailable off Windows', async 
   );
 });
 
+test('reports whether a foreground fullscreen window covers the Explorer taskbar monitor', async () => {
+  const requests = [];
+  const context = {
+    projectRoot: 'C:\\Omniscience',
+    platform: 'win32',
+    nativeWindowHost: {
+      async request(action, payload) {
+        requests.push({ action, payload });
+        return true;
+      },
+    },
+  };
+
+  assert.equal(await handleRequest({
+    method: 'explorer-fullscreen-status',
+    payload: { excludedWindowHandle: '5678' },
+  }, context), true);
+  assert.deepEqual(requests, [{
+    action: 'explorer-fullscreen-status',
+    payload: { excludedWindowHandle: '5678' },
+  }]);
+});
+
 test('does not expose filesystem methods now handled by the Rust host', async () => {
   for (const method of [
     'list-directory',

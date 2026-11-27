@@ -340,6 +340,9 @@ fn force_workspace_positions(
 }
 
 pub(crate) fn start_workspace_position_watchdog(app: AppHandle, taskbar_height: f64) {
+    #[cfg(target_os = "windows")]
+    start_workspace_visibility_watchdog(app.clone());
+
     thread::spawn(move || {
         loop {
             if app.get_webview_window("desktop").is_none() {
@@ -359,6 +362,123 @@ pub(crate) fn start_workspace_position_watchdog(app: AppHandle, taskbar_height: 
                 }
             }
             thread::sleep(Duration::from_secs(1));
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn workspace_visibility_from_status(status: &Value) -> Result<bool, String> {
+    status
+        .as_bool()
+        .ok_or_else(|| "Explorer fullscreen status was not a boolean".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn set_workspace_window_visibility(
+    window: &WebviewWindow,
+    visible: bool,
+    name: &str,
+) -> Result<(), String> {
+    if window
+        .is_visible()
+        .map_err(|error| format!("Could not read {name} visibility: {error}"))?
+        == visible
+    {
+        return Ok(());
+    }
+    if visible {
+        window
+            .show()
+            .map_err(|error| format!("Could not show {name}: {error}"))
+    } else {
+        window
+            .hide()
+            .map_err(|error| format!("Could not hide {name}: {error}"))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_workspace_overlays_visible(app: &AppHandle, visible: bool) -> Result<(), String> {
+    let panel = app
+        .get_webview_window("panel")
+        .ok_or_else(|| "The workspace panel was not created".to_string())?;
+    let controls = app
+        .get_webview_window("controls")
+        .ok_or_else(|| "The window controls were not created".to_string())?;
+
+    if visible {
+        set_workspace_window_visibility(&panel, true, "workspace panel")?;
+        set_workspace_window_visibility(&controls, true, "window controls")
+    } else {
+        set_workspace_window_visibility(&controls, false, "window controls")?;
+        set_workspace_window_visibility(&panel, false, "workspace panel")
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn start_workspace_visibility_watchdog(app: AppHandle) {
+    thread::spawn(move || {
+        let mut last_visibility = None;
+        let mut last_error: Option<String> = None;
+        loop {
+            if app.get_webview_window("desktop").is_none() {
+                break;
+            }
+
+            let status = (|| {
+                let desktop = app
+                    .get_webview_window("desktop")
+                    .ok_or_else(|| "The desktop window was not created".to_string())?;
+                let desktop_handle = desktop
+                    .hwnd()
+                    .map_err(|error| format!("Could not read the desktop window handle: {error}"))?
+                    .0 as usize;
+                let bridge = app
+                    .try_state::<NodeBridge>()
+                    .ok_or_else(|| "Node.js sidecar state is unavailable".to_string())?;
+                let mut runtime = bridge
+                    .0
+                    .lock()
+                    .map_err(|_| "Node.js sidecar lock is unavailable".to_string())?;
+                let status = request_node(
+                    &mut runtime,
+                    "explorer-fullscreen-status",
+                    json!({ "excludedWindowHandle": desktop_handle.to_string() }),
+                )?;
+                workspace_visibility_from_status(&status)
+            })();
+
+            match status {
+                Ok(fullscreen) => {
+                    let desired_visibility = !fullscreen;
+                    if last_visibility != Some(desired_visibility) {
+                        match set_workspace_overlays_visible(&app, desired_visibility) {
+                            Ok(()) => {
+                                last_visibility = Some(desired_visibility);
+                                last_error = None;
+                            }
+                            Err(error) => {
+                                if last_error.as_deref() != Some(&error) {
+                                    eprintln!(
+                                        "[workspace] could not synchronize overlay visibility: {error}"
+                                    );
+                                    last_error = Some(error);
+                                }
+                            }
+                        }
+                    } else {
+                        last_error = None;
+                    }
+                }
+                Err(error) => {
+                    if last_error.as_deref() != Some(&error) {
+                        eprintln!("[workspace] could not read Explorer fullscreen state: {error}");
+                        last_error = Some(error);
+                    }
+                }
+            }
+
+            thread::sleep(Duration::from_millis(200));
         }
     });
 }
@@ -582,7 +702,7 @@ pub(crate) fn set_controls_cross_mode(
 
 #[cfg(all(test, target_os = "windows"))]
 mod workspace_tests {
-    use super::workspace_taskbar_height;
+    use super::{workspace_taskbar_height, workspace_visibility_from_status};
     use serde_json::json;
 
     #[test]
@@ -599,5 +719,12 @@ mod workspace_tests {
             0.0
         );
         assert_eq!(workspace_taskbar_height(Ok(json!({})), 2.0), 0.0);
+    }
+
+    #[test]
+    fn fullscreen_status_controls_overlay_visibility_and_rejects_bad_responses() {
+        assert!(workspace_visibility_from_status(&json!(true)).unwrap());
+        assert!(!workspace_visibility_from_status(&json!(false)).unwrap());
+        assert!(workspace_visibility_from_status(&json!({})).is_err());
     }
 }
