@@ -1,7 +1,7 @@
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tauri::{
     AppHandle, LogicalPosition, State, WebviewWindow,
     menu::{MenuBuilder, MenuItemBuilder},
@@ -206,10 +206,145 @@ pub(crate) async fn get_file_icons(
     state: State<'_, NodeBridge>,
     paths: Vec<String>,
 ) -> Result<Value, String> {
-    call_node(
-        Arc::clone(&state.0),
-        "get-file-icons".to_string(),
-        json!({ "paths": paths }),
-    )
-    .await
+    let entries = tauri::async_runtime::spawn_blocking(move || inspect_icon_paths(paths))
+        .await
+        .map_err(|error| format!("File icon validation task failed: {error}"))??;
+
+    #[cfg(target_os = "windows")]
+    let extracted_icons = {
+        let requests = entries
+            .iter()
+            .filter(|(_, exists)| *exists)
+            .map(|(path, _)| json!({ "id": path, "path": path }))
+            .collect::<Vec<_>>();
+        if requests.is_empty() {
+            json!({})
+        } else {
+            call_node(
+                Arc::clone(&state.0),
+                "get-windows-file-icons".to_string(),
+                json!({ "requests": requests }),
+            )
+            .await?
+        }
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let extracted_icons: Option<Value> = {
+        let _ = state;
+        None
+    };
+
+    #[cfg(target_os = "windows")]
+    let extracted_icons = Some(extracted_icons);
+
+    assemble_file_icons(&entries, extracted_icons.as_ref())
+}
+
+fn inspect_icon_paths(paths: Vec<String>) -> Result<Vec<(String, bool)>, String> {
+    paths
+        .into_iter()
+        .map(|value| {
+            let path = crate::node::filesystem::resolve_absolute_path(
+                Some(&value),
+                "An absolute file path is required",
+            )?;
+            let exists = match fs::metadata(&path) {
+                Ok(metadata) => metadata.is_file() || metadata.is_dir(),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                    ) =>
+                {
+                    false
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "Could not inspect file icon path {}: {error}",
+                        path.display()
+                    ));
+                }
+            };
+            Ok((path.to_string_lossy().to_string(), exists))
+        })
+        .collect()
+}
+
+fn assemble_file_icons(
+    entries: &[(String, bool)],
+    extracted_icons: Option<&Value>,
+) -> Result<Value, String> {
+    let extracted_icons = extracted_icons
+        .map(|icons| {
+            icons
+                .as_object()
+                .ok_or_else(|| "Windows icon backend returned an invalid response".to_string())
+        })
+        .transpose()?;
+    let mut result = Map::new();
+    for (path, exists) in entries {
+        let icon = if *exists {
+            if let Some(extracted_icons) = extracted_icons {
+                extracted_icons.get(path).cloned().ok_or_else(|| {
+                    format!("Windows icon backend omitted the result for {path}")
+                })?
+            } else {
+                Value::Null
+            }
+        } else {
+            Value::Null
+        };
+        result.insert(path.clone(), icon);
+    }
+    Ok(Value::Object(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{assemble_file_icons, inspect_icon_paths};
+    use serde_json::{Map, Value, json};
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static TEST_ID: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn file_icon_paths_are_absolute_validated_and_results_keep_missing_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "omni-file-icons-{}-{}",
+            std::process::id(),
+            TEST_ID.fetch_add(1, Ordering::Relaxed),
+        ));
+        let directory = root.join("folder");
+        fs::create_dir_all(&directory).unwrap();
+        let file_path = root.join("sample.txt");
+        fs::write(&file_path, "icon").unwrap();
+        let missing_path = root.join("missing");
+        let paths = vec![
+            file_path.to_string_lossy().to_string(),
+            directory.to_string_lossy().to_string(),
+            missing_path.to_string_lossy().to_string(),
+        ];
+        let entries = inspect_icon_paths(paths.clone()).unwrap();
+
+        assert_eq!(entries[0], (paths[0].clone(), true));
+        assert_eq!(entries[1], (paths[1].clone(), true));
+        assert_eq!(entries[2], (paths[2].clone(), false));
+        assert!(inspect_icon_paths(vec!["relative.txt".to_string()]).is_err());
+        let mut extracted_icons = Map::new();
+        extracted_icons.insert(paths[0].clone(), json!("data:image/png;base64,Zm9v"));
+        extracted_icons.insert(paths[1].clone(), Value::Null);
+        let icons = assemble_file_icons(&entries, Some(&Value::Object(extracted_icons))).unwrap();
+        assert_eq!(icons[&paths[0]], "data:image/png;base64,Zm9v");
+        assert_eq!(icons[&paths[1]], Value::Null);
+        assert_eq!(icons[&paths[2]], Value::Null);
+        assert_eq!(
+            assemble_file_icons(&entries, None).unwrap()[&paths[0]],
+            Value::Null
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 }

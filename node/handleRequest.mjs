@@ -1,10 +1,6 @@
 import path from 'node:path';
 import { openEverything } from '../main/everythingSearch.js';
-import loadExtension from './loadExtension.mjs';
-import listExtensions from './listExtensions.mjs';
 import getExtensionRuntime from './getExtensionRuntime.mjs';
-import getFileIcon from './getFileIcon.mjs';
-import getFileIcons from './getFileIcons.mjs';
 import openFilePath from './openFilePath.mjs';
 import openFileWith from './openFileWith.mjs';
 import revealFilePath from './revealFilePath.mjs';
@@ -28,6 +24,7 @@ import pasteDesktopClipboard from './pasteDesktopClipboard.mjs';
 import dropFilePaths from './dropFilePaths.mjs';
 import writeDroppedFiles from './writeDroppedFiles.mjs';
 import getWindowsNativeHost from './getWindowsNativeHost.mjs';
+import getWindowsIcons from './getWindowsIcons.mjs';
 import { state } from './state.mjs';
 
 export default async function (request, context) {
@@ -39,9 +36,6 @@ export default async function (request, context) {
       projectRoot,
       fileServerUrl: typeof context === 'string' ? null : context.fileServerUrl,
     };
-  }
-  if (request?.method === 'get-extensions-list') {
-    return listExtensions(projectRoot);
   }
   if (request?.method === 'get-extension-runtime') {
     return getExtensionRuntime(projectRoot);
@@ -65,28 +59,17 @@ export default async function (request, context) {
   if (request?.method === 'launch-native-app') {
     return launchNativeApp(request.payload, context);
   }
-  if (request?.method === 'open-extension-popup') {
-    const extension = await loadExtension(projectRoot, request.payload?.extensionId);
-    if (!extension.popup) throw new Error(`Extension ${extension.name} has no action popup`);
-    return {
-      kind: 'extension_popup',
-      name: extension.name,
-      icon: extension.icon,
-      appPath: path.posix.join(
-        'omniscience',
-        'extensions',
-        extension.id,
-        extension.popup,
-      ),
-      width: 360,
-      height: 600,
-    };
-  }
-  if (request?.method === 'get-file-icon') {
-    return getFileIcon(request.payload, context);
-  }
-  if (request?.method === 'get-file-icons') {
-    return getFileIcons(request.payload, context);
+  if (request?.method === 'get-windows-file-icons') {
+    const requests = request.payload?.requests;
+    if (!Array.isArray(requests)
+      || requests.some((entry) => !entry
+        || typeof entry.id !== 'string'
+        || typeof entry.path !== 'string'
+        || entry.id !== entry.path
+        || !path.isAbsolute(entry.path))) {
+      throw new Error('Windows icon requests must contain absolute paths');
+    }
+    return Object.fromEntries(await getWindowsIcons(requests, context));
   }
   if (request?.method === 'list-hidden-windows') {
     return listHiddenWindows(context);

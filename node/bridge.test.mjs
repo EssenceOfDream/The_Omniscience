@@ -351,14 +351,12 @@ test('reserves and releases the workspace panel work area', async () => {
 test('discovers Manifest V3 extensions and resolves local popup assets', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'omni-extensions-'));
   const extensionDir = path.join(root, 'extensions', 'theme');
-  const popupDir = path.join(root, 'dist', 'omniscience', 'extensions', 'theme');
   const context = {
     projectRoot: root,
     fileServerUrl: null,
   };
   try {
     await mkdir(extensionDir, { recursive: true });
-    await mkdir(popupDir, { recursive: true });
     await writeFile(path.join(extensionDir, 'manifest.json'), JSON.stringify({
       manifest_version: 3,
       name: 'Theme test',
@@ -382,13 +380,6 @@ test('discovers Manifest V3 extensions and resolves local popup assets', async (
     await writeFile(path.join(extensionDir, 'content.js'), 'window.__extension_test__ = true;');
     await writeFile(path.join(extensionDir, 'content.css'), 'body { color: red; }');
     await writeFile(path.join(extensionDir, 'preload.js'), 'window.__preload_test__ = true;');
-    await writeFile(path.join(popupDir, 'popup.html'), '<html><body>extension popup</body></html>');
-
-    const listed = await handleRequest({ method: 'get-extensions-list' }, context);
-    assert.deepEqual(listed.map(({ id, type, title, launchable }) =>
-      ({ id, type, title, launchable })), [
-      { id: 'theme', type: 'extension', title: 'Theme test', launchable: true },
-    ]);
 
     const runtime = await handleRequest({ method: 'get-extension-runtime' }, context);
     assert.deepEqual(runtime[0].contentScripts, [{
@@ -409,18 +400,7 @@ test('discovers Manifest V3 extensions and resolves local popup assets', async (
       shell: false,
       devtools: false,
     });
-
-    const popupWindow = await handleRequest({
-      method: 'open-extension-popup',
-      payload: { extensionId: 'theme' },
-    }, context);
-    assert.equal(popupWindow.kind, 'extension_popup');
-    assert.equal(popupWindow.appPath, 'omniscience/extensions/theme/popup.html');
-    assert.equal(popupWindow.width, 360);
-    assert.match(
-      await readFile(path.join(root, 'dist', popupWindow.appPath), 'utf8'),
-      /extension popup/,
-    );
+    assert.equal(runtime[0].popup, 'popup.html');
 
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -489,12 +469,6 @@ test('preserves the legacy Chonky and Monaco file IPC contracts', async () => {
   try {
     await writeFile(textPath, 'first version');
     const context = { projectRoot: root, platform: process.platform };
-    const folders = await handleRequest({
-      method: 'componentapp-ipc',
-      payload: { appId: 'Chonky', channel: 'get-default-folders', args: [] },
-    }, context);
-    assert.ok(folders.some((folder) => folder.id === 'project' && folder.path === root));
-
     const listing = await handleRequest({
       method: 'componentapp-ipc',
       payload: { appId: 'Chonky', channel: 'get-files', args: [root] },
@@ -1168,13 +1142,10 @@ test('serves local app pages without bypassing the extension content-script runt
 });
 
 test('returns cached Windows shell icons for desktop files and folders', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-desktop-icons-'));
-  const filePath = path.join(root, 'sample.txt');
-  const directoryPath = path.join(root, 'folder');
+  const paths = ['C:\\sample.txt', 'C:\\folder'];
+  const requests = paths.map((path) => ({ id: path, path }));
   const iconRequests = [];
   const context = {
-    projectRoot: root,
-    platform: 'win32',
     async extractWindowsAppIcons(requests) {
       iconRequests.push(requests);
       return new Map(requests.map((request) => [
@@ -1183,56 +1154,21 @@ test('returns cached Windows shell icons for desktop files and folders', async (
       ]));
     },
   };
-  try {
-    await writeFile(filePath, 'content');
-    await mkdir(directoryPath);
-    const [fileIcon, folderIcon] = await Promise.all([
-      handleRequest({ method: 'get-file-icon', payload: { path: filePath } }, context),
-      handleRequest({ method: 'get-file-icon', payload: { path: directoryPath } }, context),
-    ]);
-
-    assert.deepEqual(fileIcon, {
-      success: true,
-      fileUrl: `data:image/png;base64,${Buffer.from('sample.txt').toString('base64')}`,
-    });
-
-    test('extracts icons for a directory in one background-friendly batch', async () => {
-      const root = await mkdtemp(path.join(os.tmpdir(), 'omni-desktop-icon-batch-'));
-      const paths = [path.join(root, 'one.txt'), path.join(root, 'two.txt')];
-      const calls = [];
-      const context = {
-        projectRoot: root,
-        platform: 'win32',
-        async extractWindowsAppIcons(requests) {
-          calls.push(requests);
-          return new Map(requests.map((request) => [
-            request.id,
-            { dataUrl: `data:image/png;base64,${Buffer.from(path.basename(request.path)).toString('base64')}` },
-          ]));
-        },
-      };
-      try {
-        await Promise.all(paths.map((filePath) => writeFile(filePath, 'content')));
-        const icons = await handleRequest({ method: 'get-file-icons', payload: { paths } }, context);
-        assert.deepEqual(icons, Object.fromEntries(paths.map((filePath) => [
-          filePath,
-          `data:image/png;base64,${Buffer.from(path.basename(filePath)).toString('base64')}`,
-        ])));
-        assert.equal(calls.length, 1);
-        assert.equal(calls[0].length, paths.length);
-      } finally {
-        await rm(root, { recursive: true, force: true });
-      }
-    });
-    assert.deepEqual(folderIcon, {
-      success: true,
-      fileUrl: `data:image/png;base64,${Buffer.from('folder').toString('base64')}`,
-    });
-    assert.equal(iconRequests.length, 1);
-    assert.equal(iconRequests[0].length, 2);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  const icons = await handleRequest({
+    method: 'get-windows-file-icons',
+    payload: { requests },
+  }, context);
+  const cachedIcons = await handleRequest({
+    method: 'get-windows-file-icons',
+    payload: { requests },
+  }, context);
+  assert.deepEqual(icons, Object.fromEntries(paths.map((filePath) => [
+    filePath,
+    `data:image/png;base64,${Buffer.from(path.basename(filePath)).toString('base64')}`,
+  ])));
+  assert.deepEqual(cachedIcons, icons);
+  assert.equal(iconRequests.length, 1);
+  assert.equal(iconRequests[0].length, paths.length);
 });
 
 test('uses the reusable Windows icon host for icon extraction batches', async () => {
@@ -1540,7 +1476,11 @@ test('does not expose filesystem methods now handled by the Rust host', async ()
     'parent-directory',
     'get-apps-list',
     'list-programs',
+    'get-extensions-list',
     'open-program',
+    'open-extension-popup',
+    'get-file-icon',
+    'get-file-icons',
   ]) {
     await assert.rejects(
       handleRequest({ method, payload: {} }, 'C:\\Omniscience'),
@@ -1548,6 +1488,13 @@ test('does not expose filesystem methods now handled by the Rust host', async ()
       `${method} should be routed by the Rust host`,
     );
   }
+  await assert.rejects(
+    handleRequest({
+      method: 'componentapp-ipc',
+      payload: { appId: 'Chonky', channel: 'get-default-folders', args: [] },
+    }, { projectRoot: 'C:\\Omniscience' }),
+    /Unsupported legacy IPC channel/,
+  );
 });
 
 test('serves built app files locally without exposing files outside dist', async () => {

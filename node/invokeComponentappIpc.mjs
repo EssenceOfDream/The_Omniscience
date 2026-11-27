@@ -1,6 +1,5 @@
 import { open, readFile, writeFile } from 'node:fs/promises';
 import absoluteComponentappPath from './absoluteComponentappPath.mjs';
-import getChonkyFolders from './getChonkyFolders.mjs';
 import listComponentappFiles from './listComponentappFiles.mjs';
 import getComponentappInstance from './getComponentappInstance.mjs';
 import invokeNetworkManager from './invokeNetworkManager.mjs';
@@ -13,19 +12,12 @@ export default async function (payload, context) {
   const appId = payload?.appId;
   const channel = payload?.channel;
   const args = payload?.args;
-  const projectRoot = typeof context === 'string' ? context : context.projectRoot;
   if (typeof appId !== 'string' || typeof channel !== 'string' || !Array.isArray(args)) {
     throw new Error('Componentapp id, channel, and arguments are required');
   }
   const instanceId = getComponentappInstance(payload);
 
   if (appId === 'Chonky') {
-    if (channel === 'get-default-folders') {
-      return getChonkyFolders(
-        projectRoot,
-        typeof context === 'string' ? process.platform : context.platform ?? process.platform,
-      );
-    }
     if (channel === 'get-files') {
       return listComponentappFiles(args[0]);
     }
@@ -52,12 +44,6 @@ export default async function (payload, context) {
       } catch (error) {
         return { success: false, error: error.message };
       }
-    }
-    if (channel === 'get-default-folders') {
-      return getChonkyFolders(
-        projectRoot,
-        typeof context === 'string' ? process.platform : context.platform ?? process.platform,
-      );
     }
     if (channel === 'check-text-file') {
       const filePath = absoluteComponentappPath(args[0]);

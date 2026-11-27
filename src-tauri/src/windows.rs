@@ -552,12 +552,10 @@ pub(crate) async fn open_program(
         .as_str()
         .ok_or_else(|| "Program category is missing".to_string())?;
     let result = if category == "extensions" && params["popup"] == true {
-        call_node(
-            Arc::clone(&state.0),
-            "open-extension-popup".to_string(),
-            json!({ "extensionId": name }),
-        )
-        .await?
+        crate::extensions::extension_popup_launch_data(
+            &app.state::<crate::extensions::ExtensionRuntime>().0,
+            name,
+        )?
     } else {
         if program["launchable"] != true {
             return Err("This program is not migrated to Tauri yet".to_string());
@@ -717,10 +715,7 @@ pub(crate) async fn open_program(
                 }
             }
         }
-        if matches!(
-            event,
-            WindowEvent::Destroyed | WindowEvent::Focused(_)
-        ) {
+        if matches!(event, WindowEvent::Destroyed | WindowEvent::Focused(_)) {
             let _ = app_handle.emit("managed-windows-changed", ());
         }
     });

@@ -1,4 +1,4 @@
-use std::sync::OnceLock;
+use std::{path::Path, sync::OnceLock};
 
 use serde_json::Value;
 use tauri::WebviewWindow;
@@ -8,8 +8,92 @@ pub(crate) use storage::{
     extension_storage_get, extension_storage_set, read_extension_storage_for_app,
 };
 
+pub(crate) struct ExtensionRuntime(pub(crate) Value);
+
 pub(crate) static EXTENSION_INIT_SCRIPT: OnceLock<String> = OnceLock::new();
 const EXTENSION_RUNTIME_TEMPLATE: &str = include_str!("extension-runtime.js");
+
+pub(crate) fn list_extensions(runtime: &Value) -> Result<Value, String> {
+    let extensions = runtime
+        .as_array()
+        .ok_or_else(|| "Chromium extension configuration must be an array".to_string())?;
+    let entries = extensions
+        .iter()
+        .map(|extension| {
+            let string_field = |field: &str| {
+                extension
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| format!("Chromium extension configuration has no {field}"))
+            };
+            let id = string_field("id")?;
+            let title = string_field("title")?;
+            let name = string_field("name")?;
+            let version = string_field("version")?;
+            let description = string_field("description")?;
+            let icon = extension
+                .get("icon")
+                .ok_or_else(|| "Chromium extension configuration has no icon".to_string())?;
+            let popup = extension
+                .get("popup")
+                .ok_or_else(|| "Chromium extension configuration has no popup".to_string())?;
+
+            Ok(serde_json::json!({
+                "id": id,
+                "extensionId": id,
+                "title": title,
+                "name": name,
+                "type": "extension",
+                "kind": "extension",
+                "launchable": popup.as_str().is_some_and(|path| !path.is_empty()),
+                "version": version,
+                "description": description,
+                "icon": icon,
+            }))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(Value::Array(entries))
+}
+
+pub(crate) fn extension_popup_launch_data(
+    runtime: &Value,
+    extension_id: &str,
+) -> Result<Value, String> {
+    let extensions = runtime
+        .as_array()
+        .ok_or_else(|| "Chromium extension configuration must be an array".to_string())?;
+    let extension = extensions
+        .iter()
+        .find(|extension| extension.get("id").and_then(Value::as_str) == Some(extension_id))
+        .ok_or_else(|| format!("Extension {extension_id} is unavailable"))?;
+    let name = extension
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("Extension {extension_id} has no name"))?;
+    let popup = extension
+        .get("popup")
+        .and_then(Value::as_str)
+        .filter(|popup| !popup.is_empty())
+        .ok_or_else(|| format!("Extension {name} has no action popup"))?;
+    let icon = extension
+        .get("icon")
+        .ok_or_else(|| format!("Extension {name} has no icon metadata"))?;
+    let app_path = Path::new("omniscience")
+        .join("extensions")
+        .join(extension_id)
+        .join(popup)
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    Ok(serde_json::json!({
+        "kind": "extension_popup",
+        "name": name,
+        "icon": icon,
+        "appPath": app_path,
+        "width": 360,
+        "height": 600,
+    }))
+}
 
 pub(crate) fn extension_target_for_webview(label: &str) -> &'static str {
     if label.starts_with("component-") {
@@ -145,9 +229,96 @@ pub(super) fn validate_extension_storage_window(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_extension_initialization_script, extension_target_for_webview,
-        is_webapp_storage_window,
+        build_extension_initialization_script, extension_popup_launch_data,
+        extension_target_for_webview, is_webapp_storage_window, list_extensions,
     };
+
+    #[test]
+    fn extension_popup_launch_data_uses_validated_runtime_resources() {
+        let runtime = serde_json::json!([{
+            "id": "sample",
+            "name": "Sample",
+            "icon": null,
+            "popup": "popup.html",
+        }]);
+        assert_eq!(
+            extension_popup_launch_data(&runtime, "sample").unwrap(),
+            serde_json::json!({
+                "kind": "extension_popup",
+                "name": "Sample",
+                "icon": null,
+                "appPath": "omniscience/extensions/sample/popup.html",
+                "width": 360,
+                "height": 600,
+            })
+        );
+        assert!(extension_popup_launch_data(&runtime, "missing").is_err());
+        assert!(
+            extension_popup_launch_data(
+                &serde_json::json!([{
+                    "id": "sample",
+                    "name": "Sample",
+                    "icon": null,
+                    "popup": null,
+                }]),
+                "sample",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn extension_list_preserves_runtime_metadata_and_popup_launchability() {
+        let runtime = serde_json::json!([
+            {
+                "id": "theme",
+                "title": "Theme",
+                "name": "Theme",
+                "version": "1.0",
+                "description": "Theme tools",
+                "icon": "data:image/png;base64,aWNvbg==",
+                "popup": "popup.html",
+            },
+            {
+                "id": "no-popup",
+                "title": "No popup",
+                "name": "No popup",
+                "version": "2.0",
+                "description": "",
+                "icon": null,
+                "popup": null,
+            },
+        ]);
+        assert_eq!(
+            list_extensions(&runtime).unwrap(),
+            serde_json::json!([
+                {
+                    "id": "theme",
+                    "extensionId": "theme",
+                    "title": "Theme",
+                    "name": "Theme",
+                    "type": "extension",
+                    "kind": "extension",
+                    "launchable": true,
+                    "version": "1.0",
+                    "description": "Theme tools",
+                    "icon": "data:image/png;base64,aWNvbg==",
+                },
+                {
+                    "id": "no-popup",
+                    "extensionId": "no-popup",
+                    "title": "No popup",
+                    "name": "No popup",
+                    "type": "extension",
+                    "kind": "extension",
+                    "launchable": false,
+                    "version": "2.0",
+                    "description": "",
+                    "icon": null,
+                }
+            ])
+        );
+    }
 
     #[test]
     fn extension_storage_is_limited_to_http_webapp_and_popup_windows() {

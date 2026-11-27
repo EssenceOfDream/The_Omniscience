@@ -67,6 +67,7 @@ pub fn run() {
                 .map_err(std::io::Error::other)?;
             let extension_script = build_extension_initialization_script(&extension_data)
                 .map_err(std::io::Error::other)?;
+            app.manage(crate::extensions::ExtensionRuntime(extension_data.clone()));
             let has_omni_theme = extension_data
                 .as_array()
                 .map(|extensions| {

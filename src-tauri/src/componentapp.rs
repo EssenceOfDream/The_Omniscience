@@ -1,7 +1,8 @@
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use tauri::{State, WebviewWindow};
+use tauri::{AppHandle, State, WebviewWindow};
 
 use crate::{
     node::{NodeBridge, call_node},
@@ -339,14 +340,99 @@ pub(crate) fn component_app_init_script(
     Ok(format!("{theme_script}\n{component_script}"))
 }
 
+fn filesystem_root(path: &Path) -> PathBuf {
+    let mut root = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => root.push(component.as_os_str()),
+            _ => break,
+        }
+    }
+    root
+}
+
+fn chonky_default_folders(
+    project_root: &Path,
+    directories: &Value,
+    platform: &str,
+) -> Result<Value, String> {
+    let directory = |name: &str| {
+        directories
+            .get(name)
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("User directory {name} is unavailable"))
+    };
+    let root_id = if platform == "win32" { "c_root" } else { "root" };
+    let root_name = if platform == "win32" {
+        "Диск C:"
+    } else {
+        "Корень ФС"
+    };
+    Ok(json!([
+        {
+            "id": root_id,
+            "name": root_name,
+            "path": filesystem_root(project_root),
+        },
+        {
+            "id": "project",
+            "name": "The Omniscience",
+            "path": project_root,
+        },
+        {
+            "id": "home",
+            "name": "Домашняя папка",
+            "path": directory("home")?,
+        },
+        {
+            "id": "downloads",
+            "name": "Загрузки",
+            "path": directory("download")?,
+        },
+        {
+            "id": "pictures",
+            "name": "Картинки",
+            "path": directory("pictures")?,
+        },
+        {
+            "id": "documents",
+            "name": "Документы",
+            "path": directory("documents")?,
+        },
+        {
+            "id": "music",
+            "name": "Музыка",
+            "path": directory("music")?,
+        },
+        {
+            "id": "videos",
+            "name": "Видео",
+            "path": directory("videos")?,
+        },
+    ]))
+}
+
 #[tauri::command]
 pub(crate) async fn componentapp_request(
+    app: AppHandle,
     window: WebviewWindow,
     state: State<'_, NodeBridge>,
     app_id: String,
     method: String,
     payload: Value,
 ) -> Result<Value, String> {
+    if matches!(app_id.as_str(), "Chonky" | "Monaco") && method == "get-default-folders" {
+        let project_root = crate::node::runtime_root(&app)?;
+        let directories = crate::node::filesystem::user_directories()?;
+        let platform = if cfg!(target_os = "windows") {
+            "win32"
+        } else if cfg!(target_os = "macos") {
+            "darwin"
+        } else {
+            "linux"
+        };
+        return chonky_default_folders(&project_root, &directories, platform);
+    }
     if crate::componentapp_backends::has_backend(&app_id) {
         return crate::componentapp_backends::dispatch(&app_id, &method, payload);
     }
@@ -362,4 +448,32 @@ pub(crate) async fn componentapp_request(
         }),
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{chonky_default_folders, filesystem_root};
+    use serde_json::json;
+    use std::env;
+
+    #[test]
+    fn chonky_default_folders_keep_legacy_order_and_root() {
+        let project_root = env::temp_dir().join("Omniscience");
+        let directories = json!({
+            "home": "C:/Users/Test",
+            "download": "C:/Users/Test/Downloads",
+            "pictures": "C:/Users/Test/Pictures",
+            "documents": "C:/Users/Test/Documents",
+            "music": "C:/Users/Test/Music",
+            "videos": "C:/Users/Test/Videos",
+        });
+        let folders = chonky_default_folders(&project_root, &directories, "win32").unwrap();
+        assert_eq!(folders[0]["id"], "c_root");
+        assert_eq!(folders[0]["path"], json!(filesystem_root(&project_root)));
+        assert_eq!(folders[1]["id"], "project");
+        assert_eq!(folders[2]["id"], "home");
+        assert_eq!(folders[3]["id"], "downloads");
+        assert_eq!(folders[7]["id"], "videos");
+        assert!(chonky_default_folders(&project_root, &json!({}), "linux").is_err());
+    }
 }

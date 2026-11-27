@@ -12,6 +12,14 @@ mod safe_entry_name;
 
 use serde_json::Value;
 
+pub(crate) fn resolve_absolute_path(value: Option<&str>, error: &str) -> Result<std::path::PathBuf, String> {
+    absolute_path::absolute_path(value, error)
+}
+
+pub(crate) fn user_directories() -> Result<Value, String> {
+    get_user_directories::get_user_directories()
+}
+
 pub(super) fn dispatch(method: &str, payload: &Value) -> Result<Option<Value>, String> {
     let result = match method {
         "list-directory" => list_directory::list_directory(payload).map(Some),

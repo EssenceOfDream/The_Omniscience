@@ -14,9 +14,9 @@ use std::{
 };
 
 use serde_json::{Value, json};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
-mod filesystem;
+pub(crate) mod filesystem;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -309,6 +309,12 @@ pub(crate) async fn node_request(
     }
     match method.as_str() {
         "get-theme" => return crate::theme::current_theme_settings(&app),
+        "get-extensions-list" => {
+            let runtime = app
+                .try_state::<crate::extensions::ExtensionRuntime>()
+                .ok_or_else(|| "Chromium extension configuration is unavailable".to_string())?;
+            return crate::extensions::list_extensions(&runtime.0);
+        }
         "get-apps-list" | "list-programs" => {
             let root = runtime_root(&app)?;
             let platform = if cfg!(target_os = "windows") {
