@@ -4,15 +4,12 @@ import DEFAULT_THEME_SETTINGS from './DEFAULT_THEME_SETTINGS.mjs';
 import loadExtension from './loadExtension.mjs';
 import listExtensions from './listExtensions.mjs';
 import getExtensionRuntime from './getExtensionRuntime.mjs';
-import readExtensionStorage from './readExtensionStorage.mjs';
-import writeExtensionStorage from './writeExtensionStorage.mjs';
 import getFileIcon from './getFileIcon.mjs';
 import getFileIcons from './getFileIcons.mjs';
 import getProgramIcon from './getProgramIcon.mjs';
 import openFilePath from './openFilePath.mjs';
 import openFileWith from './openFileWith.mjs';
 import revealFilePath from './revealFilePath.mjs';
-import normalizeThemeSettings from './normalizeThemeSettings.mjs';
 import openWindowsSettingsCategory from './openWindowsSettingsCategory.mjs';
 import listPrograms from './listPrograms.mjs';
 import getOverviewApps from './getOverviewApps.mjs';
@@ -59,32 +56,6 @@ export default async function (request, context) {
   if (request?.method === 'get-extension-runtime') {
     return getExtensionRuntime(projectRoot);
   }
-  if (request?.method === 'extension-storage-get') {
-    if (typeof context === 'string') throw new Error('Extension storage is unavailable');
-    const values = await readExtensionStorage(context, request.payload?.extensionId);
-    const keys = request.payload?.keys;
-    if (keys == null) return values;
-    if (typeof keys === 'string') return Object.hasOwn(values, keys) ? { [keys]: values[keys] } : {};
-    if (Array.isArray(keys)) {
-      return Object.fromEntries(keys.filter((key) => Object.hasOwn(values, key))
-        .map((key) => [key, values[key]]));
-    }
-    if (typeof keys === 'object' && !Array.isArray(keys)) {
-      return Object.fromEntries(Object.entries(keys)
-        .map(([key, fallback]) => [key, Object.hasOwn(values, key) ? values[key] : fallback]));
-    }
-    throw new Error('Invalid extension storage keys');
-  }
-  if (request?.method === 'extension-storage-set') {
-    if (typeof context === 'string') throw new Error('Extension storage is unavailable');
-    return writeExtensionStorage(
-      context,
-      request.payload?.extensionId,
-      request.payload?.items ?? {},
-      request.payload?.removeKeys ?? [],
-      request.payload?.clear === true,
-    );
-  }
   if (request?.method === 'componentapp-ipc') {
     return invokeComponentappIpc(request.payload, context);
   }
@@ -109,19 +80,6 @@ export default async function (request, context) {
   }
   if (request?.method === 'launch-native-app') {
     return launchNativeApp(request.payload, context);
-  }
-  if (request?.method === 'set-theme') {
-    if (typeof context === 'string') {
-      throw new Error('Theme settings are unavailable in this request context');
-    }
-    context.themeSettings = normalizeThemeSettings(request.payload);
-    return context.themeSettings;
-  }
-  if (request?.method === 'get-theme') {
-    if (typeof context === 'string') {
-      throw new Error('Theme settings are unavailable in this request context');
-    }
-    return context.themeSettings ?? { ...DEFAULT_THEME_SETTINGS };
   }
   if (request?.method === 'open-program') {
     const programs = await listPrograms(

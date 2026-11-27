@@ -1,11 +1,11 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
-use serde_json::{Value, json};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use serde_json::Value;
+use tauri::WebviewWindow;
 
-use crate::{
-    node::{NodeBridge, call_node},
-    state::ThemeSettingsState,
+mod storage;
+pub(crate) use storage::{
+    extension_storage_get, extension_storage_set, read_extension_storage_for_app,
 };
 
 pub(crate) static EXTENSION_INIT_SCRIPT: OnceLock<String> = OnceLock::new();
@@ -104,7 +104,7 @@ fn is_webapp_storage_window(label: &str, url: &tauri::Url) -> bool {
     has_webapp_label && matches!(url.scheme(), "http" | "https")
 }
 
-fn validate_extension_storage_window(
+pub(super) fn validate_extension_storage_window(
     window: &WebviewWindow,
     extension_id: &str,
 ) -> Result<(), String> {
@@ -140,81 +140,6 @@ fn validate_extension_storage_window(
     }
 
     Err("Extension storage is unavailable to this window".to_string())
-}
-
-#[tauri::command]
-pub(crate) async fn extension_storage_get(
-    window: WebviewWindow,
-    state: State<'_, NodeBridge>,
-    extension_id: String,
-    keys: Option<Value>,
-) -> Result<Value, String> {
-    validate_extension_storage_window(&window, &extension_id)?;
-    call_node(
-        Arc::clone(&state.0),
-        "extension-storage-get".to_string(),
-        json!({ "extensionId": extension_id, "keys": keys }),
-    )
-    .await
-}
-
-#[tauri::command]
-pub(crate) async fn extension_storage_set(
-    app: AppHandle,
-    window: WebviewWindow,
-    state: State<'_, NodeBridge>,
-    theme_state: State<'_, ThemeSettingsState>,
-    extension_id: String,
-    items: Value,
-    remove_keys: Option<Vec<String>>,
-    clear: Option<bool>,
-) -> Result<(), String> {
-    validate_extension_storage_window(&window, &extension_id)?;
-    let node_bridge = Arc::clone(&state.0);
-    let changes = call_node(
-        Arc::clone(&node_bridge),
-        "extension-storage-set".to_string(),
-        json!({
-            "extensionId": extension_id.clone(),
-            "items": items,
-            "removeKeys": remove_keys.unwrap_or_default(),
-            "clear": clear.unwrap_or(false),
-        }),
-    )
-    .await?;
-
-    if extension_id == "omni-theme" {
-        let stored_settings = call_node(
-            Arc::clone(&node_bridge),
-            "extension-storage-get".to_string(),
-            json!({ "extensionId": extension_id.clone(), "keys": null }),
-        )
-        .await?;
-        let settings = call_node(node_bridge, "set-theme".to_string(), stored_settings).await?;
-        *theme_state
-            .0
-            .lock()
-            .map_err(|_| "Omni Theme settings lock is unavailable".to_string())? = settings;
-    }
-
-    let payload = json!({ "extensionId": extension_id, "changes": changes });
-    app.emit("extension-storage-changed", payload.clone())
-        .map_err(|error| format!("Could not notify extensions about storage changes: {error}"))?;
-    let payload = serde_json::to_string(&payload)
-        .map_err(|error| format!("Could not encode extension storage changes: {error}"))?;
-    let script = format!(
-        "window.dispatchEvent(new CustomEvent('__omniscience_extension_storage_changed__',{{detail:{payload}}}));"
-    );
-    for (label, popup) in app.webview_windows() {
-        if label.starts_with("program-") {
-            if let Err(error) = popup.eval(&script) {
-                eprintln!(
-                    "[extensions] could not notify program window {label} about storage changes: {error}"
-                );
-            }
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

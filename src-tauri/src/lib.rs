@@ -2,6 +2,7 @@ pub(crate) mod componentapp;
 pub(crate) mod desktop;
 pub(crate) mod extensions;
 pub(crate) mod node;
+pub(crate) mod programs;
 pub(crate) mod state;
 pub(crate) mod theme;
 pub(crate) mod windows;
@@ -26,15 +27,19 @@ use crate::{
     componentapp::componentapp_request,
     desktop::{get_file_icons, show_desktop_context_menu, start_file_drag, trash_path},
     extensions::{
-        EXTENSION_INIT_SCRIPT, build_extension_initialization_script, extension_storage_get,
-        extension_storage_set, extension_target_for_webview,
+        EXTENSION_INIT_SCRIPT, build_extension_initialization_script,
+        extension_storage_get, extension_storage_set, extension_target_for_webview,
+        read_extension_storage_for_app,
     },
     node::{NodeBridge, node_request, request_node, start_node_bridge},
     state::{
         ControlsCrossMode, DesktopContextMenuState, ProgramWindowIcons, ThemeSettingsState,
         WorkspaceGeometry,
     },
-    theme::{current_theme_settings, update_theme, window_chrome_initialization_script},
+    theme::{
+        current_theme_settings, default_theme_settings, normalize_theme_settings, update_theme,
+        window_chrome_initialization_script,
+    },
     windows::{
         close_overview, get_program_window_settings, list_program_windows, manage_program_window,
         open_overview, open_program, open_program_devtools, open_window_settings,
@@ -80,25 +85,12 @@ pub fn run() {
             app.manage(DesktopContextMenuState(std::sync::Mutex::new(
                 serde_json::Value::Null,
             )));
-            let theme_settings = {
-                let node_bridge = app.state::<NodeBridge>();
-                let mut runtime = node_bridge
-                    .0
-                    .lock()
-                    .map_err(|_| std::io::Error::other("Node.js sidecar lock is unavailable"))?;
-                let mut settings = request_node(&mut runtime, "get-theme", json!({}))
+            let theme_settings = if has_omni_theme {
+                let stored_settings = read_extension_storage_for_app(app.handle(), "omni-theme")
                     .map_err(std::io::Error::other)?;
-                if has_omni_theme {
-                    let stored_settings = request_node(
-                        &mut runtime,
-                        "extension-storage-get",
-                        json!({ "extensionId": "omni-theme", "keys": null }),
-                    )
-                    .map_err(std::io::Error::other)?;
-                    settings = request_node(&mut runtime, "set-theme", stored_settings)
-                        .map_err(std::io::Error::other)?;
-                }
-                settings
+                normalize_theme_settings(&stored_settings).map_err(std::io::Error::other)?
+            } else {
+                default_theme_settings()
             };
             app.manage(ThemeSettingsState(std::sync::Mutex::new(theme_settings)));
             app.manage(ControlsCrossMode(std::sync::Mutex::new(false)));

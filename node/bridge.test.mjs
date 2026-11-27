@@ -403,13 +403,12 @@ test('lists project programs and marks only apps with an HTML entry point', asyn
   }
 });
 
-test('discovers Manifest V3 extensions, resolves local popup assets, and persists extension storage', async () => {
+test('discovers Manifest V3 extensions and resolves local popup assets', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'omni-extensions-'));
   const extensionDir = path.join(root, 'extensions', 'theme');
   const popupDir = path.join(root, 'dist', 'omniscience', 'extensions', 'theme');
   const context = {
     projectRoot: root,
-    extensionStoragePath: path.join(root, 'extension-data'),
     fileServerUrl: null,
   };
   try {
@@ -478,26 +477,6 @@ test('discovers Manifest V3 extensions, resolves local popup assets, and persist
       /extension popup/,
     );
 
-    const changes = await handleRequest({
-      method: 'extension-storage-set',
-      payload: { extensionId: 'theme', items: { enabled: true, count: 2 } },
-    }, context);
-    assert.deepEqual(changes, {
-      enabled: { newValue: true },
-      count: { newValue: 2 },
-    });
-    assert.deepEqual(await handleRequest({
-      method: 'extension-storage-get',
-      payload: { extensionId: 'theme', keys: { enabled: false, missing: 'default' } },
-    }, context), { enabled: true, missing: 'default' });
-    await handleRequest({
-      method: 'extension-storage-set',
-      payload: { extensionId: 'theme', items: {}, removeKeys: ['count'] },
-    }, context);
-    assert.deepEqual(await handleRequest({
-      method: 'extension-storage-get',
-      payload: { extensionId: 'theme' },
-    }, context), { enabled: true });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1366,26 +1345,11 @@ test('serves local app pages without bypassing the extension content-script runt
     );
     const { server, baseUrl } = await startFileServer(dist);
     try {
-      const settings = await handleRequest({
-        method: 'set-theme',
-        payload: { ...DEFAULT_THEME_SETTINGS, maxR: 80, shadowColor: '#123abc' },
-      }, context);
-      assert.equal(settings.maxR, 80);
-      assert.deepEqual(await handleRequest({ method: 'get-theme' }, context), settings);
-
       const page = await fetch(`${baseUrl}/webapps/music/index.html`);
       const html = await page.text();
       assert.match(html, /<title>Music<\/title>/);
       assert.doesNotMatch(html, /__omniscience\/theme/);
       assert.equal(page.headers.get('content-type'), 'text/html; charset=utf-8');
-
-      await assert.rejects(
-        handleRequest({
-          method: 'set-theme',
-          payload: { ...DEFAULT_THEME_SETTINGS, targetAlpha: 2 },
-        }, context),
-        /Invalid Omni Theme settings/,
-      );
     } finally {
       await new Promise((resolve, reject) => {
         server.close((error) => error ? reject(error) : resolve());
@@ -1874,6 +1838,20 @@ test('serves built app files locally without exposing files outside dist', async
     } finally {
       await new Promise((resolve, reject) => {
         server.close((error) => error ? reject(error) : resolve());
+      });
+
+      test('does not handle extension storage or theme settings now owned by Rust', async () => {
+        for (const method of [
+          'extension-storage-get',
+          'extension-storage-set',
+          'get-theme',
+          'set-theme',
+        ]) {
+          await assert.rejects(
+            handleRequest({ method }, 'C:\\Omniscience'),
+            /Unknown Node\.js sidecar method/,
+          );
+        }
       });
     }
   } finally {

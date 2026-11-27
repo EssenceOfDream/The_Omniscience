@@ -299,12 +299,31 @@ pub(crate) async fn call_node(
 
 #[tauri::command]
 pub(crate) async fn node_request(
+    app: AppHandle,
     state: State<'_, NodeBridge>,
     method: String,
     payload: Value,
 ) -> Result<Value, String> {
     if let Some(result) = filesystem::dispatch(&method, &payload)? {
         return Ok(result);
+    }
+    match method.as_str() {
+        "get-theme" => return crate::theme::current_theme_settings(&app),
+        "get-apps-list" | "list-programs" => {
+            let root = runtime_root(&app)?;
+            let platform = if cfg!(target_os = "windows") {
+                "win32"
+            } else if cfg!(target_os = "macos") {
+                "darwin"
+            } else {
+                "linux"
+            };
+            if method == "get-apps-list" {
+                return crate::programs::overview_apps(&root, platform);
+            }
+            return crate::programs::list_programs(&root, platform).map(Value::Array);
+        }
+        _ => {}
     }
     call_node(Arc::clone(&state.0), method, payload).await
 }

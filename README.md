@@ -82,7 +82,7 @@ areas. Target defaults are `webapps: true`, `componentapps: true`,
 `extensions: false`, `shell: false`, and `devtools: false`. `omni-theme`
 enables all targets and uses `omniscience.preloads`.
 
-The app exposes a small `chrome.runtime` API and persistent
+The app exposes a small `chrome.runtime` API and Rust-backed persistent
 `chrome.storage.local` get/set/remove/clear operations. Extensions with
 `action.default_popup` appear in the application catalog and open their popup
 in a separate Tauri window on the app's local origin. Popup windows receive a
