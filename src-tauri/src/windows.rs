@@ -275,7 +275,6 @@ fn get_program_window(app: &AppHandle, label: &str) -> Result<WebviewWindow, Str
 #[tauri::command]
 pub(crate) async fn prepare_program_window_drag(
     app: AppHandle,
-    state: State<'_, crate::node::NodeBridge>,
     label: String,
     mode: String,
     direction: Option<String>,
@@ -330,15 +329,7 @@ pub(crate) async fn prepare_program_window_drag(
     });
 
     if cfg!(target_os = "windows") {
-        let result = call_node(
-            Arc::clone(&state.0),
-            "set-cursor-position".to_string(),
-            json!({ "x": cursor.0, "y": cursor.1 }),
-        )
-        .await?;
-        if result.get("ok").and_then(Value::as_bool) != Some(true) {
-            return Err("Could not move the cursor to the window".to_string());
-        }
+        crate::node::set_cursor_position(cursor.0, cursor.1)?;
         response["cursor"] = json!({
             "x": cursor.0 as f64 / scale_factor,
             "y": cursor.1 as f64 / scale_factor

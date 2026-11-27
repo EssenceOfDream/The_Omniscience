@@ -1,6 +1,7 @@
 mod absolute_path;
 mod create_entry;
 mod delete_path;
+mod drop_paths;
 mod get_entry;
 mod get_user_directories;
 mod list_directory;
@@ -34,6 +35,7 @@ pub(super) fn dispatch(method: &str, payload: &Value) -> Result<Option<Value>, S
         "delete-path" => delete_path::delete_path(payload).map(Some),
         "parent-directory" => parent_directory::parent_directory(payload).map(Some),
         "write-dropped-files" => write_dropped_files::write_dropped_files(payload).map(Some),
+        "drop-paths" => drop_paths::drop_paths(payload).map(Some),
         _ => return Ok(None),
     };
     result

@@ -463,47 +463,27 @@ test('builds TypeScript componentapps from both roots without leaving generated 
   }
 });
 
-test('preserves the legacy Chonky and Monaco file IPC contracts', async () => {
+test('does not expose Monaco filesystem IPC handled by Rust', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'omni-componentapp-ipc-'));
   const textPath = path.join(root, 'sample.txt');
   try {
     await writeFile(textPath, 'first version');
     const context = { projectRoot: root, platform: process.platform };
-    const listing = await handleRequest({
-      method: 'componentapp-ipc',
-      payload: { appId: 'Chonky', channel: 'get-files', args: [root] },
-    }, context);
-    assert.equal(listing.success, true);
-    assert.ok(listing.files.some((file) => file.id === textPath && file.isDir === false));
-
-    const monacoListing = await handleRequest({
-      method: 'componentapp-ipc',
-      payload: { appId: 'Monaco', channel: 'get-files', args: [root] },
-    }, context);
-    assert.equal(monacoListing.success, true);
-    assert.ok(monacoListing.files.some((file) => file.id === textPath && file.isDir === false));
-
-    const read = await handleRequest({
-      method: 'componentapp-ipc',
-      payload: { appId: 'Monaco', channel: 'read-file', args: [textPath] },
-    }, context);
-    assert.deepEqual(read, { success: true, content: 'first version' });
-    await handleRequest({
-      method: 'componentapp-ipc',
-      payload: {
-        appId: 'Monaco',
-        channel: 'write-file',
-        args: [textPath, 'second version'],
-      },
-    }, context);
-    assert.equal(await readFile(textPath, 'utf8'), 'second version');
-    await assert.rejects(
-      handleRequest({
-        method: 'componentapp-ipc',
-        payload: { appId: 'Monaco', channel: 'unexpected', args: [] },
-      }, context),
-      /Unsupported legacy IPC channel/,
-    );
+    for (const [appId, channel] of [
+      ['Chonky', 'get-files'],
+      ['Monaco', 'get-files'],
+      ['Monaco', 'read-file'],
+      ['Monaco', 'write-file'],
+      ['Monaco', 'check-text-file'],
+    ]) {
+      await assert.rejects(
+        handleRequest({
+          method: 'componentapp-ipc',
+          payload: { appId, channel, args: [textPath] },
+        }, context),
+        /Unsupported legacy IPC channel/,
+      );
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -540,45 +520,16 @@ test('adapts NetworkManager Wi-Fi requests and reports unsupported Bluetooth exp
   assert.match(bluetooth.error, /Bluetooth/);
 });
 
-test('routes validated power-menu actions to the native power backend', async () => {
-  const calls = [];
-  const context = {
-    projectRoot: 'C:\\Omniscience',
-    platform: 'win32',
-    systemRoot: 'D:\\Windows',
-    nativeWindowHost: {
-      async request(action) {
-        calls.push({ action });
-        return true;
-      },
-    },
-    async execFileAsync(executable, args, options) {
-      calls.push({ executable, args, options });
-      return {};
-    },
-  };
-  const request = (action) => handleRequest({
+test('does not expose power actions through the Node componentapp fallback', async () => {
+  await assert.rejects(handleRequest({
     method: 'componentapp-ipc',
     payload: {
       appId: 'power-menu',
       channel: 'power-menu:execute',
-      args: [{ action }],
+      args: [{ action: 'restart' }],
       windowId: 'component-power-menu-test',
     },
-  }, context);
-
-  assert.deepEqual(await request('restart'), { ok: true });
-  assert.deepEqual(await request('sleep'), { ok: true });
-  assert.deepEqual(calls, [
-    {
-      executable: path.join('D:\\Windows', 'System32', 'shutdown.exe'),
-      args: ['/r', '/t', '0'],
-      options: { windowsHide: true, timeout: 10000 },
-    },
-    { action: 'suspend' },
-  ]);
-  await assert.rejects(request('run-command'), /Unsupported power action/);
-  assert.equal(calls.length, 2);
+  }, 'C:\\Omniscience'), /Unsupported legacy IPC channel/);
 });
 
 test('starts and stops a Min WebSocket relay for an individual component window', async () => {
@@ -946,27 +897,6 @@ test('uses the Windows file clipboard for desktop copy and paste', async () => {
   }
 });
 
-test('copies native dropped files without overwriting', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-desktop-drop-'));
-  const sourceDirectory = path.join(root, 'source');
-  const destination = path.join(root, 'destination');
-  const source = path.join(sourceDirectory, 'sample.txt');
-  try {
-    await mkdir(sourceDirectory);
-    await mkdir(destination);
-    await writeFile(source, 'native');
-    const dropped = await handleRequest({
-      method: 'drop-paths',
-      payload: { paths: [source], dir: destination },
-    }, root);
-    assert.equal(dropped.success, true);
-    assert.equal(await readFile(source, 'utf8'), 'native');
-
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 test('reports the Node runtime through the sidecar health request', async () => {
   const health = await handleRequest({ method: 'health' }, 'C:\\Omniscience');
   assert.equal(health.nodeVersion, process.version);
@@ -1300,21 +1230,17 @@ test('prepares drags for visible native windows at their matching cursor positio
     payload: { hwnd: '302', mode: 'resize', direction: 'se' },
   });
 
-  await handleRequest({
-    method: 'set-cursor-position',
-    payload: { x: -40, y: 210 },
-  }, context);
-  assert.deepEqual(requests.at(-1), {
-    action: 'cursor',
-    payload: { x: -40, y: 210 },
-  });
   await assert.rejects(
     handleRequest({
       method: 'set-cursor-position',
-      payload: { x: 1.5, y: 210 },
+      payload: { x: -40, y: 210 },
     }, context),
-    /32-bit integers/,
+    /Unknown Node.js sidecar method/,
   );
+  assert.deepEqual(requests.at(-1), {
+    action: 'prepare-drag',
+    payload: { hwnd: '302', mode: 'resize', direction: 'se' },
+  });
 });
 
 test('reports when hidden-window enumeration is unavailable off Windows', async () => {
@@ -1349,6 +1275,7 @@ test('does not expose filesystem methods now handled by the Rust host', async ()
     'open-with',
     'reveal-path',
     'write-dropped-files',
+    'drop-paths',
     'open-windows-settings-category',
   ]) {
     await assert.rejects(

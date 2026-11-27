@@ -421,6 +421,23 @@ pub(crate) async fn componentapp_request(
     method: String,
     payload: Value,
 ) -> Result<Value, String> {
+    if app_id == "power-menu" && method == "power-menu:execute" {
+        return crate::componentapp_power::perform_power_action(&payload).await;
+    }
+    if app_id == "Monaco" {
+        match method.as_str() {
+            "read-file" => return crate::componentapp_file::read_componentapp_file(&payload),
+            "write-file" => return crate::componentapp_file::write_componentapp_file(&payload),
+            "check-text-file" => {
+                return crate::componentapp_file::check_componentapp_text_file(&payload);
+            }
+            _ => {}
+        }
+    }
+    if matches!(app_id.as_str(), "Chonky" | "Monaco") && method == "get-files" {
+        let path = payload.as_array().and_then(|arguments| arguments.first());
+        return crate::componentapp_files::list_componentapp_files(path.and_then(Value::as_str));
+    }
     if matches!(app_id.as_str(), "Chonky" | "Monaco") && method == "get-default-folders" {
         let project_root = crate::node::runtime_root(&app)?;
         let directories = crate::node::filesystem::user_directories()?;

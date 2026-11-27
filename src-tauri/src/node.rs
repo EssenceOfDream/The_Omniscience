@@ -20,8 +20,8 @@ pub(crate) mod filesystem;
 mod open_file_path;
 mod open_with;
 mod reveal_file_path;
-mod windows_settings;
 mod windows_everything;
+mod windows_settings;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -96,9 +96,8 @@ pub(crate) fn runtime_root(_app: &AppHandle) -> Result<PathBuf, String> {
             .map_err(|error| format!("Could not prepare runtime extraction: {error}"))?;
 
         let extract_result = (|| {
-            let mut archive =
-                zip::ZipArchive::new(Cursor::new(crate::embedded_runtime::BUNDLE))
-                    .map_err(|error| format!("Could not open embedded Node.js runtime: {error}"))?;
+            let mut archive = zip::ZipArchive::new(Cursor::new(crate::embedded_runtime::BUNDLE))
+                .map_err(|error| format!("Could not open embedded Node.js runtime: {error}"))?;
             for index in 0..archive.len() {
                 let mut entry = archive
                     .by_index(index)
@@ -112,9 +111,7 @@ pub(crate) fn runtime_root(_app: &AppHandle) -> Result<PathBuf, String> {
                     .map(|mode| mode & 0o170000 == 0o120000)
                     .unwrap_or(false)
                 {
-                    return Err(
-                        "Runtime archive contains an unsupported symbolic link".to_string()
-                    );
+                    return Err("Runtime archive contains an unsupported symbolic link".to_string());
                 }
                 let output_path = staging_dir.join(relative_path);
                 if entry.is_dir() {
@@ -153,9 +150,8 @@ pub(crate) fn runtime_root(_app: &AppHandle) -> Result<PathBuf, String> {
             )
             .map_err(|error| format!("Could not mark the extracted runtime: {error}"))?;
             if runtime_dir.exists() {
-                fs::rename(&runtime_dir, &backup_dir).map_err(|error| {
-                    format!("Could not replace the previous runtime: {error}")
-                })?;
+                fs::rename(&runtime_dir, &backup_dir)
+                    .map_err(|error| format!("Could not replace the previous runtime: {error}"))?;
             }
             if let Err(error) = fs::rename(&staging_dir, &runtime_dir) {
                 if backup_dir.exists() {
@@ -287,6 +283,33 @@ pub(crate) fn request_node(
         .ok_or_else(|| "Node.js sidecar response is missing its result".to_string())
 }
 
+pub(crate) fn set_cursor_position(x: i32, y: i32) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        unsafe {
+            windows::Win32::UI::WindowsAndMessaging::SetCursorPos(x, y)
+                .map_err(|error| format!("Could not move the cursor: {error}"))
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (x, y);
+        Err("Cursor positioning is only supported on Windows".to_string())
+    }
+}
+
+fn cursor_coordinates(payload: &Value) -> Result<(i32, i32), String> {
+    let coordinate = |axis| {
+        payload
+            .get(axis)
+            .and_then(Value::as_i64)
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| "Cursor coordinates must be valid 32-bit integers".to_string())
+    };
+    Ok((coordinate("x")?, coordinate("y")?))
+}
+
 pub(crate) async fn call_node(
     runtime: Arc<Mutex<NodeRuntime>>,
     method: String,
@@ -302,6 +325,23 @@ pub(crate) async fn call_node(
     .map_err(|error| format!("Node.js sidecar task failed: {error}"))?
 }
 
+#[cfg(test)]
+mod tests {
+    use super::cursor_coordinates;
+    use serde_json::json;
+
+    #[test]
+    fn cursor_coordinates_accept_signed_32_bit_values_and_reject_invalid_numbers() {
+        assert_eq!(
+            cursor_coordinates(&json!({ "x": i32::MIN, "y": i32::MAX })).unwrap(),
+            (i32::MIN, i32::MAX)
+        );
+        assert!(cursor_coordinates(&json!({ "x": 0, "y": 2147483648_i64 })).is_err());
+        assert!(cursor_coordinates(&json!({ "x": 1.5, "y": 0 })).is_err());
+        assert!(cursor_coordinates(&json!({ "x": 0 })).is_err());
+    }
+}
+
 #[tauri::command]
 pub(crate) async fn node_request(
     app: AppHandle,
@@ -313,6 +353,11 @@ pub(crate) async fn node_request(
         return Ok(result);
     }
     match method.as_str() {
+        "set-cursor-position" => {
+            let (x, y) = cursor_coordinates(&payload)?;
+            set_cursor_position(x, y)?;
+            return Ok(json!({ "ok": true }));
+        }
         "open-path" => return open_file_path::open_file_path(&app, &payload),
         "open-with" => return open_with::open_with(&payload),
         "reveal-path" => return reveal_file_path::reveal_file_path(&app, &payload),

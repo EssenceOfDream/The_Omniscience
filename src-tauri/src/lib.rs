@@ -1,4 +1,7 @@
 pub(crate) mod componentapp;
+pub(crate) mod componentapp_file;
+pub(crate) mod componentapp_files;
+pub(crate) mod componentapp_power;
 pub(crate) mod desktop;
 pub(crate) mod extensions;
 pub(crate) mod node;

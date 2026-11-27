@@ -8,7 +8,6 @@ import listNativeWindows from './listNativeWindows.mjs';
 import manageHiddenWindow from './manageHiddenWindow.mjs';
 import manageNativeWindow from './manageNativeWindow.mjs';
 import prepareNativeWindowDrag from './prepareNativeWindowDrag.mjs';
-import setCursorPosition from './setCursorPosition.mjs';
 import getExplorerShellStatus from './getExplorerShellStatus.mjs';
 import setShellWindowLayer from './setShellWindowLayer.mjs';
 import setShellPanelDock from './setShellPanelDock.mjs';
@@ -16,7 +15,6 @@ import removeShellPanelDock from './removeShellPanelDock.mjs';
 import setDesktopClipboard from './setDesktopClipboard.mjs';
 import getDesktopClipboard from './getDesktopClipboard.mjs';
 import pasteDesktopClipboard from './pasteDesktopClipboard.mjs';
-import dropFilePaths from './dropFilePaths.mjs';
 import getWindowsNativeHost from './getWindowsNativeHost.mjs';
 import getWindowsIcons from './getWindowsIcons.mjs';
 import { state } from './state.mjs';
@@ -80,9 +78,6 @@ export default async function (request, context) {
   if (request?.method === 'prepare-native-window-drag') {
     return prepareNativeWindowDrag(request.payload, context);
   }
-  if (request?.method === 'set-cursor-position') {
-    return setCursorPosition(request.payload, context);
-  }
   if (request?.method === 'explorer-shell-status') {
     return getExplorerShellStatus(context);
   }
@@ -94,9 +89,6 @@ export default async function (request, context) {
   }
   if (request?.method === 'remove-shell-panel-dock') {
     return removeShellPanelDock(request.payload, context);
-  }
-  if (request?.method === 'drop-paths') {
-    return dropFilePaths(request.payload);
   }
   if (request?.method === 'copy-files' || request?.method === 'cut-files') {
     return setDesktopClipboard(
