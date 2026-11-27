@@ -162,6 +162,14 @@ pub(crate) fn list_programs(root: &Path, platform: &str) -> Result<Vec<Value>, S
     Ok(programs)
 }
 
+pub(crate) fn find_program<'a>(programs: &'a [Value], requested_id: &str) -> Option<&'a Value> {
+    programs.iter().find(|program| {
+        ["id", "name", "entryPoint"]
+            .iter()
+            .any(|field| program[*field].as_str() == Some(requested_id))
+    })
+}
+
 fn encode_base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -185,7 +193,11 @@ fn encode_base64(bytes: &[u8]) -> String {
     encoded
 }
 
-fn program_icon(root: &Path, category: &str, name: &str) -> Result<Option<String>, String> {
+pub(crate) fn program_icon(
+    root: &Path,
+    category: &str,
+    name: &str,
+) -> Result<Option<String>, String> {
     for (extension, mime_type) in ICONS {
         let path = root
             .join(category)
@@ -212,7 +224,7 @@ fn program_icon(root: &Path, category: &str, name: &str) -> Result<Option<String
     Ok(None)
 }
 
-fn encode_uri_component(value: &str) -> String {
+pub(crate) fn encode_uri_component(value: &str) -> String {
     let mut encoded = String::new();
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {
@@ -258,7 +270,7 @@ pub(crate) fn overview_apps(root: &Path, platform: &str) -> Result<Value, String
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_base64, list_programs, overview_apps};
+    use super::{encode_base64, find_program, list_programs, overview_apps};
     use serde_json::json;
     use std::{
         fs,
@@ -324,6 +336,10 @@ mod tests {
         fs::write(root.join("componentapps/shared/favicon.svg"), "<svg/>").unwrap();
 
         let programs = list_programs(&root, "linux").unwrap();
+        assert!(find_program(&programs, "componentapps:shared").is_some());
+        assert!(find_program(&programs, "shared").is_some());
+        assert!(find_program(&programs, "componentapps/shared/index.html").is_some());
+        assert!(find_program(&programs, "componentapps:missing").is_none());
         assert_eq!(
             serde_json::Value::Array(programs),
             json!([

@@ -1,18 +1,14 @@
 import path from 'node:path';
 import { openEverything } from '../main/everythingSearch.js';
-import DEFAULT_THEME_SETTINGS from './DEFAULT_THEME_SETTINGS.mjs';
 import loadExtension from './loadExtension.mjs';
 import listExtensions from './listExtensions.mjs';
 import getExtensionRuntime from './getExtensionRuntime.mjs';
 import getFileIcon from './getFileIcon.mjs';
 import getFileIcons from './getFileIcons.mjs';
-import getProgramIcon from './getProgramIcon.mjs';
 import openFilePath from './openFilePath.mjs';
 import openFileWith from './openFileWith.mjs';
 import revealFilePath from './revealFilePath.mjs';
 import openWindowsSettingsCategory from './openWindowsSettingsCategory.mjs';
-import listPrograms from './listPrograms.mjs';
-import getOverviewApps from './getOverviewApps.mjs';
 import listNativeApps from './listNativeApps.mjs';
 import launchNativeApp from './launchNativeApp.mjs';
 import invokeComponentappIpc from './invokeComponentappIpc.mjs';
@@ -44,12 +40,6 @@ export default async function (request, context) {
       fileServerUrl: typeof context === 'string' ? null : context.fileServerUrl,
     };
   }
-  if (request?.method === 'get-apps-list') {
-    return getOverviewApps(
-      projectRoot,
-      typeof context === 'string' ? process.platform : context.platform ?? process.platform,
-    );
-  }
   if (request?.method === 'get-extensions-list') {
     return listExtensions(projectRoot);
   }
@@ -58,12 +48,6 @@ export default async function (request, context) {
   }
   if (request?.method === 'componentapp-ipc') {
     return invokeComponentappIpc(request.payload, context);
-  }
-  if (request?.method === 'list-programs') {
-    return listPrograms(
-      projectRoot,
-      typeof context === 'string' ? process.platform : context.platform ?? process.platform,
-    );
   }
   if (request?.method === 'list-native-apps') {
     const apps = await listNativeApps(context);
@@ -81,60 +65,21 @@ export default async function (request, context) {
   if (request?.method === 'launch-native-app') {
     return launchNativeApp(request.payload, context);
   }
-  if (request?.method === 'open-program') {
-    const programs = await listPrograms(
-      projectRoot,
-      typeof context === 'string' ? process.platform : context.platform ?? process.platform,
-    );
-    const requestedId = request.payload?.programId;
-    const program = typeof requestedId === 'string'
-      ? programs.find((item) =>
-        item.id === requestedId
-        || item.name === requestedId
-        || item.entryPoint === requestedId)
-      : null;
-    if (!program) throw new Error('Program not found');
-    if (program.category === 'extensions' && request.payload?.params?.popup === true) {
-      const extension = await loadExtension(projectRoot, program.name);
-      if (!extension.popup) throw new Error(`Extension ${extension.name} has no action popup`);
-      return {
-        kind: 'extension_popup',
-        name: extension.name,
-        icon: extension.icon,
-        appPath: path.posix.join(
-          'omniscience',
-          'extensions',
-          extension.id,
-          extension.popup,
-        ),
-        width: 360,
-        height: 600,
-      };
-    }
-    if (!program.launchable) throw new Error('This program is not migrated to Tauri yet');
-    if (program.category === 'componentapps') {
-      return {
-        kind: 'componentapp',
-        name: program.name,
-        icon: await getProgramIcon(projectRoot, program.category, program.name),
-        appPath: path.posix.join(
-          'omniscience',
-          program.category,
-          program.name,
-          'index.html',
-        ),
-        themeSettings: typeof context === 'string'
-          ? { ...DEFAULT_THEME_SETTINGS }
-          : context.themeSettings ?? { ...DEFAULT_THEME_SETTINGS },
-      };
-    }
-    if (!context.fileServerUrl) throw new Error('Local app server is unavailable');
-
+  if (request?.method === 'open-extension-popup') {
+    const extension = await loadExtension(projectRoot, request.payload?.extensionId);
+    if (!extension.popup) throw new Error(`Extension ${extension.name} has no action popup`);
     return {
-      kind: 'webapp',
-      name: program.name,
-      url: `${context.fileServerUrl}/${program.category}/${encodeURIComponent(program.name)}/index.html`,
-      icon: await getProgramIcon(projectRoot, program.category, program.name),
+      kind: 'extension_popup',
+      name: extension.name,
+      icon: extension.icon,
+      appPath: path.posix.join(
+        'omniscience',
+        'extensions',
+        extension.id,
+        extension.popup,
+      ),
+      width: 360,
+      height: 600,
     };
   }
   if (request?.method === 'get-file-icon') {

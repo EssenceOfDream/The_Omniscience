@@ -6,15 +6,16 @@ use std::sync::{
 
 use serde_json::{Value, json};
 use tauri::{
-    AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder, WindowEvent,
+    AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent,
     webview::{NewWindowFeatures, NewWindowResponse},
 };
 use tauri_plugin_opener::OpenerExt;
 
 use crate::{
     componentapp::component_app_init_script,
-    node::call_node,
+    node::{call_node, runtime_root},
+    programs::{encode_uri_component, find_program, list_programs, program_icon},
     state::{
         ManagedProgramWindow, ProgramWindowIcons, ProgramWindowSettings, WindowBounds,
         WorkspaceGeometry, window_backdrop_effects,
@@ -533,16 +534,71 @@ pub(crate) async fn open_program(
     program_id: String,
     params: Value,
 ) -> Result<(), String> {
-    let result = call_node(
-        Arc::clone(&state.0),
-        "open-program".to_string(),
-        json!({ "programId": program_id, "params": params }),
-    )
-    .await?;
+    let project_root = runtime_root(&app)?;
+    let platform = if cfg!(target_os = "windows") {
+        "win32"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
+    let programs = list_programs(&project_root, platform)?;
+    let program =
+        find_program(&programs, &program_id).ok_or_else(|| "Program not found".to_string())?;
+    let name = program["name"]
+        .as_str()
+        .ok_or_else(|| "Program name is missing".to_string())?;
+    let category = program["category"]
+        .as_str()
+        .ok_or_else(|| "Program category is missing".to_string())?;
+    let result = if category == "extensions" && params["popup"] == true {
+        call_node(
+            Arc::clone(&state.0),
+            "open-extension-popup".to_string(),
+            json!({ "extensionId": name }),
+        )
+        .await?
+    } else {
+        if program["launchable"] != true {
+            return Err("This program is not migrated to Tauri yet".to_string());
+        }
+        let icon = program_icon(&project_root, category, name)?;
+        if category == "componentapps" {
+            json!({
+                "kind": "componentapp",
+                "name": name,
+                "icon": icon,
+                "appPath": PathBuf::from("omniscience")
+                    .join(category)
+                    .join(name)
+                    .join("index.html"),
+                "themeSettings": current_theme_settings(&app)?,
+            })
+        } else if category == "webapps" {
+            let health = call_node(Arc::clone(&state.0), "health".to_string(), json!({})).await?;
+            let file_server_url = health
+                .get("fileServerUrl")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "Local app server is unavailable".to_string())?;
+            json!({
+                "kind": "webapp",
+                "name": name,
+                "url": format!(
+                    "{}/{}/{}/index.html",
+                    file_server_url.trim_end_matches('/'),
+                    category,
+                    encode_uri_component(name),
+                ),
+                "icon": icon,
+            })
+        } else {
+            return Err("This program cannot be opened as a window".to_string());
+        }
+    };
     let name = result
         .get("name")
         .and_then(Value::as_str)
-        .ok_or_else(|| "Node.js sidecar returned no program name".to_string())?;
+        .ok_or_else(|| "Program launch data has no program name".to_string())?;
     let icon = result
         .get("icon")
         .and_then(Value::as_str)
@@ -551,13 +607,13 @@ pub(crate) async fn open_program(
     let kind = result
         .get("kind")
         .and_then(Value::as_str)
-        .ok_or_else(|| "Node.js sidecar returned no program type".to_string())?;
+        .ok_or_else(|| "Program launch data has no program type".to_string())?;
 
     let (label, builder) = if kind == "componentapp" {
         let app_path = result
             .get("appPath")
             .and_then(Value::as_str)
-            .ok_or_else(|| "Node.js sidecar returned no componentapp path".to_string())?;
+            .ok_or_else(|| "Program launch data has no componentapp path".to_string())?;
         let theme_settings = result
             .get("themeSettings")
             .ok_or_else(|| "Node.js sidecar returned no theme settings".to_string())?;
@@ -604,9 +660,9 @@ pub(crate) async fn open_program(
             let url = result
                 .get("url")
                 .and_then(Value::as_str)
-                .ok_or_else(|| "Node.js sidecar returned no program URL".to_string())?
+                .ok_or_else(|| "Program launch data has no program URL".to_string())?
                 .parse()
-                .map_err(|error| format!("Node.js sidecar returned an invalid URL: {error}"))?;
+                .map_err(|error| format!("Program launch data has an invalid URL: {error}"))?;
             WebviewUrl::External(url)
         };
         let label = if is_extension_popup {

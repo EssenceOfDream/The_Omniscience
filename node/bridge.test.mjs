@@ -7,12 +7,7 @@ import vm from 'node:vm';
 import os from 'node:os';
 import path from 'node:path';
 import { WebSocket } from 'ws';
-import {
-  DEFAULT_THEME_SETTINGS,
-  handleRequest,
-  listPrograms,
-  startFileServer,
-} from './bridge.mjs';
+import { DEFAULT_THEME_SETTINGS, handleRequest, startFileServer } from './bridge.mjs';
 import extractWindowsAppIcons from './extractWindowsAppIcons.mjs';
 import { zipAndSplit } from '../componentapps/omni-archiver/zip.js';
 import buildComponentApps from '../main/vite_build.js';
@@ -353,56 +348,6 @@ test('reserves and releases the workspace panel work area', async () => {
   }, context), /Valid shell panel bounds/);
 });
 
-test('lists project programs and marks only apps with an HTML entry point', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-tauri-'));
-  try {
-    await mkdir(path.join(root, 'componentapps', 'settings'), { recursive: true });
-    await mkdir(path.join(root, 'componentapps', 'windows-settings'), { recursive: true });
-    await mkdir(path.join(root, 'webapps', 'music'), { recursive: true });
-    await mkdir(path.join(root, 'extensions', 'theme'), { recursive: true });
-    await mkdir(path.join(root, 'dist', 'componentapps', 'windows-settings'), { recursive: true });
-    await mkdir(path.join(root, 'dist', 'webapps', 'music'), { recursive: true });
-    await writeFile(path.join(root, 'webapps', 'music', 'index.html'), '<html></html>');
-    await writeFile(
-      path.join(root, 'componentapps', 'windows-settings', 'index.html'),
-      '<html></html>',
-    );
-    await writeFile(
-      path.join(root, 'dist', 'componentapps', 'windows-settings', 'index.html'),
-      '<html></html>',
-    );
-    await writeFile(path.join(root, 'dist', 'webapps', 'music', 'index.html'), '<html></html>');
-    await writeFile(path.join(root, 'extensions', 'theme', 'manifest.json'), '{}');
-
-    const programs = await handleRequest(
-      { method: 'list-programs' },
-      { projectRoot: root, platform: 'win32' },
-    );
-    assert.deepEqual(programs.map(({ id, entryPoint }) => ({ id, entryPoint })), [
-      { id: 'componentapps:settings', entryPoint: null },
-      {
-        id: 'componentapps:windows-settings',
-        entryPoint: path.join('componentapps', 'windows-settings', 'index.html'),
-      },
-      { id: 'extensions:theme', entryPoint: null },
-      { id: 'webapps:music', entryPoint: path.join('webapps', 'music', 'index.html') },
-    ]);
-    assert.equal(programs.find(({ id }) => id === 'webapps:music').launchable, true);
-    assert.equal(programs.find(({ id }) => id === 'componentapps:settings').launchable, false);
-    assert.equal(programs.find(({ id }) => id === 'componentapps:windows-settings').launchable, true);
-    const nonWindowsPrograms = await handleRequest(
-      { method: 'list-programs' },
-      { projectRoot: root, platform: 'linux' },
-    );
-    assert.equal(
-      nonWindowsPrograms.find(({ id }) => id === 'componentapps:windows-settings').launchable,
-      false,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 test('discovers Manifest V3 extensions and resolves local popup assets', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'omni-extensions-'));
   const extensionDir = path.join(root, 'extensions', 'theme');
@@ -466,8 +411,8 @@ test('discovers Manifest V3 extensions and resolves local popup assets', async (
     });
 
     const popupWindow = await handleRequest({
-      method: 'open-program',
-      payload: { programId: 'extensions:theme', params: { popup: true } },
+      method: 'open-extension-popup',
+      payload: { extensionId: 'theme' },
     }, context);
     assert.equal(popupWindow.kind, 'extension_popup');
     assert.equal(popupWindow.appPath, 'omniscience/extensions/theme/popup.html');
@@ -477,59 +422,6 @@ test('discovers Manifest V3 extensions and resolves local popup assets', async (
       /extension popup/,
     );
 
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('discovers componentapps in both source roots and accepts TypeScript entry points', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-componentapp-sources-'));
-  try {
-    const appSources = [
-      path.join(root, 'legacy', 'componentapps', 'legacy-only'),
-      path.join(root, 'legacy', 'componentapps', 'shared'),
-      path.join(root, 'componentapps', 'shared'),
-    ];
-    for (const directory of appSources) {
-      await mkdir(directory, { recursive: true });
-    }
-    await writeFile(
-      path.join(appSources[0], 'Index.ts'),
-      'export const legacyEntry: string = "legacy";',
-    );
-    await writeFile(
-      path.join(appSources[1], 'Index.jsx'),
-      'export default function LegacyShared() {}',
-    );
-    await writeFile(
-      path.join(appSources[2], 'Index.tsx'),
-      'export default function CurrentShared() { return <main />; }',
-    );
-
-    for (const name of ['legacy-only', 'shared']) {
-      const builtPath = path.join(root, 'public', 'omniscience', 'componentapps', name);
-      await mkdir(builtPath, { recursive: true });
-      await writeFile(path.join(builtPath, 'index.html'), '<html></html>');
-    }
-
-    const programs = await listPrograms(root);
-    assert.deepEqual(
-      programs.filter(({ category }) => category === 'componentapps').map(
-        ({ id, entryPoint, launchable }) => ({ id, entryPoint, launchable }),
-      ),
-      [
-        {
-          id: 'componentapps:legacy-only',
-          entryPoint: path.join('componentapps', 'legacy-only', 'index.html'),
-          launchable: true,
-        },
-        {
-          id: 'componentapps:shared',
-          entryPoint: path.join('componentapps', 'shared', 'index.html'),
-          launchable: true,
-        },
-      ],
-    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -587,66 +479,6 @@ test('builds TypeScript componentapps from both roots without leaving generated 
     await assert.rejects(stat(path.join(currentPath, 'index.html')));
   } finally {
     global.paths = previousPaths;
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('builds the original overview app list from built component and web apps', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-tauri-overview-'));
-  try {
-    for (const appPath of [
-      path.join(root, 'componentapps', 'apps-list'),
-      path.join(root, 'webapps', 'browser'),
-      path.join(root, 'webapps', 'music'),
-      path.join(root, 'public', 'omniscience', 'componentapps', 'apps-list'),
-      path.join(root, 'public', 'omniscience', 'webapps', 'browser'),
-      path.join(root, 'public', 'omniscience', 'webapps', 'music'),
-    ]) {
-      await mkdir(appPath, { recursive: true });
-    }
-    await writeFile(path.join(root, 'componentapps', 'apps-list', 'index.html'), '');
-    await writeFile(path.join(root, 'componentapps', 'apps-list', 'favicon.png'), 'icon');
-    await writeFile(path.join(root, 'webapps', 'browser', 'index.html'), '');
-    await writeFile(path.join(root, 'webapps', 'music', 'index.html'), '');
-    await writeFile(
-      path.join(root, 'public', 'omniscience', 'componentapps', 'apps-list', 'index.html'),
-      '',
-    );
-    await writeFile(
-      path.join(root, 'public', 'omniscience', 'webapps', 'browser', 'index.html'),
-      '',
-    );
-    await writeFile(
-      path.join(root, 'public', 'omniscience', 'webapps', 'music', 'index.html'),
-      '',
-    );
-
-    const apps = await handleRequest(
-      { method: 'get-apps-list' },
-      { projectRoot: root, platform: 'win32' },
-    );
-    assert.deepEqual(apps.map(({ id, type, url }) => ({ id, type, url })), [
-      {
-        id: 'apps-list',
-        type: 'componentapp',
-        url: '/omniscience/componentapps/apps-list/index.html',
-      },
-      {
-        id: 'browser',
-        type: 'webapp',
-        url: '/omniscience/webapps/browser/index.html',
-      },
-      {
-        id: 'music',
-        type: 'webapp',
-        url: '/omniscience/webapps/music/index.html',
-      },
-    ]);
-    assert.equal(
-      apps.find(({ id }) => id === 'apps-list').icon,
-      `data:image/png;base64,${Buffer.from('icon').toString('base64')}`,
-    );
-  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -1118,37 +950,12 @@ test('reports Windows settings process startup failures', async () => {
   );
 });
 
-test('opens the browser redirect as a regular webapp', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-tauri-browser-'));
-  try {
-    const redirectPage = await readFile(
-      new URL('../webapps/browser/index.html', import.meta.url),
-      'utf8',
-    );
-    assert.match(redirectPage, /window\.location\.href\s*=\s*['"]https:\/\/www\.google\.com['"]/);
-    await mkdir(path.join(root, 'webapps', 'browser'), { recursive: true });
-    await mkdir(path.join(root, 'public', 'omniscience', 'webapps', 'browser'), {
-      recursive: true,
-    });
-    await writeFile(path.join(root, 'webapps', 'browser', 'index.html'), redirectPage);
-    await writeFile(
-      path.join(root, 'public', 'omniscience', 'webapps', 'browser', 'index.html'),
-      '<!doctype html>',
-    );
-    const result = await handleRequest({
-      method: 'open-program',
-      payload: { programId: 'browser' },
-    }, {
-      projectRoot: root,
-      platform: 'win32',
-      fileServerUrl: 'http://127.0.0.1:4321',
-    });
-    assert.equal(result.kind, 'webapp');
-    assert.equal(result.name, 'browser');
-    assert.equal(result.url, 'http://127.0.0.1:4321/webapps/browser/index.html');
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+test('browser webapp redirects to Google', async () => {
+  const redirectPage = await readFile(
+    new URL('../webapps/browser/index.html', import.meta.url),
+    'utf8',
+  );
+  assert.match(redirectPage, /window\.location\.href\s*=\s*['"]https:\/\/www\.google\.com['"]/);
 });
 
 test('opens desktop shortcuts through the Windows shell instead of opener path scope', async () => {
@@ -1721,86 +1528,6 @@ test('reports when hidden-window enumeration is unavailable off Windows', async 
   );
 });
 
-test('does not open a program unless it is an available webapp', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-tauri-'));
-  try {
-    await assert.rejects(
-      handleRequest(
-        { method: 'open-program', payload: { programId: 'webapps:missing' } },
-        { projectRoot: root, fileServerUrl: 'http://127.0.0.1:1234' },
-      ),
-      /Program not found/,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('opens built componentapps in trusted Tauri asset windows', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-tauri-'));
-  const context = {
-    projectRoot: root,
-    fileServerUrl: 'http://127.0.0.1:1234',
-    themeSettings: { ...DEFAULT_THEME_SETTINGS },
-    platform: 'win32',
-  };
-  try {
-    for (const appName of ['create-item', 'power-menu', 'rename', 'settings', 'windows-settings']) {
-      await mkdir(path.join(root, 'componentapps', appName), { recursive: true });
-      await writeFile(path.join(root, 'componentapps', appName, 'index.html'), '<html></html>');
-    }
-    for (const appName of ['create-item', 'power-menu', 'rename', 'windows-settings']) {
-      await mkdir(path.join(root, 'dist', 'componentapps', appName), { recursive: true });
-      await writeFile(path.join(root, 'dist', 'componentapps', appName, 'index.html'), '<html></html>');
-    }
-
-    const programs = await handleRequest({ method: 'list-programs' }, context);
-    assert.equal(programs.find(({ id }) => id === 'componentapps:create-item').launchable, true);
-    assert.equal(programs.find(({ id }) => id === 'componentapps:power-menu').launchable, true);
-    assert.equal(programs.find(({ id }) => id === 'componentapps:rename').launchable, true);
-    assert.equal(programs.find(({ id }) => id === 'componentapps:windows-settings').launchable, true);
-    assert.equal(programs.find(({ id }) => id === 'componentapps:settings').launchable, false);
-
-    const result = await handleRequest({
-      method: 'open-program',
-      payload: { programId: 'componentapps:create-item' },
-    }, context);
-    assert.deepEqual(result, {
-      kind: 'componentapp',
-      name: 'create-item',
-      icon: null,
-      appPath: 'omniscience/componentapps/create-item/index.html',
-      themeSettings: context.themeSettings,
-    });
-
-    const powerMenuProgram = await handleRequest({
-      method: 'open-program',
-      payload: { programId: 'componentapps:power-menu' },
-    }, context);
-    assert.deepEqual(powerMenuProgram, {
-      kind: 'componentapp',
-      name: 'power-menu',
-      icon: null,
-      appPath: 'omniscience/componentapps/power-menu/index.html',
-      themeSettings: context.themeSettings,
-    });
-
-    const settingsProgram = await handleRequest({
-      method: 'open-program',
-      payload: { programId: 'componentapps:windows-settings' },
-    }, context);
-    assert.deepEqual(settingsProgram, {
-      kind: 'componentapp',
-      name: 'windows-settings',
-      icon: null,
-      appPath: 'omniscience/componentapps/windows-settings/index.html',
-      themeSettings: context.themeSettings,
-    });
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 test('does not expose filesystem methods now handled by the Rust host', async () => {
   for (const method of [
     'list-directory',
@@ -1811,6 +1538,9 @@ test('does not expose filesystem methods now handled by the Rust host', async ()
     'rename-path',
     'delete-path',
     'parent-directory',
+    'get-apps-list',
+    'list-programs',
+    'open-program',
   ]) {
     await assert.rejects(
       handleRequest({ method, payload: {} }, 'C:\\Omniscience'),
