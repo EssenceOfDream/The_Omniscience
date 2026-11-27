@@ -1,7 +1,5 @@
 import path from 'node:path';
-import { openEverything } from '../main/everythingSearch.js';
 import getExtensionRuntime from './getExtensionRuntime.mjs';
-import openWindowsSettingsCategory from './openWindowsSettingsCategory.mjs';
 import listNativeApps from './listNativeApps.mjs';
 import launchNativeApp from './launchNativeApp.mjs';
 import invokeComponentappIpc from './invokeComponentappIpc.mjs';
@@ -85,9 +83,6 @@ export default async function (request, context) {
   if (request?.method === 'set-cursor-position') {
     return setCursorPosition(request.payload, context);
   }
-  if (request?.method === 'open-windows-settings-category') {
-    return openWindowsSettingsCategory(request.payload, context);
-  }
   if (request?.method === 'explorer-shell-status') {
     return getExplorerShellStatus(context);
   }
@@ -99,13 +94,6 @@ export default async function (request, context) {
   }
   if (request?.method === 'remove-shell-panel-dock') {
     return removeShellPanelDock(request.payload, context);
-  }
-  if (request?.method === 'open-everything') {
-    if ((typeof context === 'string' ? process.platform : context.platform) !== 'win32') {
-      throw new Error('Everything search is only available on Windows');
-    }
-    await openEverything();
-    return { opened: true };
   }
   if (request?.method === 'drop-paths') {
     return dropFilePaths(request.payload);

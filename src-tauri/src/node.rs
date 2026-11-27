@@ -20,6 +20,8 @@ pub(crate) mod filesystem;
 mod open_file_path;
 mod open_with;
 mod reveal_file_path;
+mod windows_settings;
+mod windows_everything;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -314,6 +316,10 @@ pub(crate) async fn node_request(
         "open-path" => return open_file_path::open_file_path(&app, &payload),
         "open-with" => return open_with::open_with(&payload),
         "reveal-path" => return reveal_file_path::reveal_file_path(&app, &payload),
+        "open-windows-settings-category" => {
+            return windows_settings::open_windows_settings_category(&payload);
+        }
+        "open-everything" => return windows_everything::open_everything(),
         "get-theme" => return crate::theme::current_theme_settings(&app),
         "get-extensions-list" => {
             let runtime = app

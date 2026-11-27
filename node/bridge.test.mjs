@@ -687,37 +687,6 @@ test('provides an isolated PTY session for the xterm component app', async () =>
   }
 });
 
-test('opens a validated Windows settings category through control.exe', async () => {
-  const calls = [];
-  const child = new EventEmitter();
-  child.unref = () => calls.push('unref');
-  const context = {
-    projectRoot: 'C:\\Omniscience',
-    platform: 'win32',
-    windir: 'D:\\Windows',
-    spawn(...args) {
-      calls.push(args);
-      process.nextTick(() => child.emit('spawn'));
-      return child;
-    },
-  };
-
-  const result = await handleRequest({
-    method: 'open-windows-settings-category',
-    payload: { category: 'update' },
-  }, context);
-
-  assert.deepEqual(result, { ok: true });
-  assert.deepEqual(calls, [
-    [
-      path.join('D:\\Windows', 'System32', 'control.exe'),
-      ['/name', 'Microsoft.WindowsUpdate'],
-      { detached: true, stdio: 'ignore', windowsHide: false },
-    ],
-    'unref',
-  ]);
-});
-
 test('lists Windows Start Menu shortcuts and packaged apps for the shell menu', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'omni-tauri-native-apps-'));
   const appData = path.join(root, 'user');
@@ -885,43 +854,6 @@ test('launches only listed Windows shortcuts and packaged apps', async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-});
-
-test('rejects unknown categories and Windows settings requests off Windows', async () => {
-  const context = { projectRoot: 'C:\\Omniscience', platform: 'win32' };
-  await assert.rejects(
-    handleRequest({
-      method: 'open-windows-settings-category',
-      payload: { category: 'arbitrary-command' },
-    }, context),
-    /category was not found/,
-  );
-  await assert.rejects(
-    handleRequest({
-      method: 'open-windows-settings-category',
-      payload: { category: 'system' },
-    }, { projectRoot: 'C:\\Omniscience', platform: 'linux' }),
-    /only available on Windows/,
-  );
-});
-
-test('reports Windows settings process startup failures', async () => {
-  const child = new EventEmitter();
-  const context = {
-    projectRoot: 'C:\\Omniscience',
-    platform: 'win32',
-    spawn() {
-      process.nextTick(() => child.emit('error', new Error('Control Panel is unavailable')));
-      return child;
-    },
-  };
-  await assert.rejects(
-    handleRequest({
-      method: 'open-windows-settings-category',
-      payload: { category: 'system' },
-    }, context),
-    /Control Panel is unavailable/,
-  );
 });
 
 test('browser webapp redirects to Google', async () => {
@@ -1409,6 +1341,7 @@ test('does not expose filesystem methods now handled by the Rust host', async ()
     'list-programs',
     'get-extensions-list',
     'open-program',
+    'open-everything',
     'open-extension-popup',
     'get-file-icon',
     'get-file-icons',
@@ -1416,6 +1349,7 @@ test('does not expose filesystem methods now handled by the Rust host', async ()
     'open-with',
     'reveal-path',
     'write-dropped-files',
+    'open-windows-settings-category',
   ]) {
     await assert.rejects(
       handleRequest({ method, payload: {} }, 'C:\\Omniscience'),

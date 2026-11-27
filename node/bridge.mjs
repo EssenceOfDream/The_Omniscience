@@ -1,6 +1,5 @@
 export { default as DEFAULT_THEME_SETTINGS } from './DEFAULT_THEME_SETTINGS.mjs';
 
-export { default as openWindowsSettingsCategory } from './openWindowsSettingsCategory.mjs';
 export { default as startFileServer } from './startFileServer.mjs';
 export { default as handleRequest } from './handleRequest.mjs';
 
