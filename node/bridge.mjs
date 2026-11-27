@@ -1,10 +1,5 @@
 export { default as DEFAULT_THEME_SETTINGS } from './DEFAULT_THEME_SETTINGS.mjs';
 
-export { default as getUserDirectories } from './getUserDirectories.mjs';
-export { default as readDesktopDirectory } from './readDesktopDirectory.mjs';
-export { default as createEntry } from './createEntry.mjs';
-export { default as renameEntry } from './renameEntry.mjs';
-
 export { default as normalizeThemeSettings } from './normalizeThemeSettings.mjs';
 export { default as openWindowsSettingsCategory } from './openWindowsSettingsCategory.mjs';
 export { default as startFileServer } from './startFileServer.mjs';

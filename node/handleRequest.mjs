@@ -1,5 +1,4 @@
 import path from 'node:path';
-import { rm } from 'node:fs/promises';
 import { openEverything } from '../main/everythingSearch.js';
 import DEFAULT_THEME_SETTINGS from './DEFAULT_THEME_SETTINGS.mjs';
 import loadExtension from './loadExtension.mjs';
@@ -10,13 +9,6 @@ import writeExtensionStorage from './writeExtensionStorage.mjs';
 import getFileIcon from './getFileIcon.mjs';
 import getFileIcons from './getFileIcons.mjs';
 import getProgramIcon from './getProgramIcon.mjs';
-import absoluteFilePath from './absoluteFilePath.mjs';
-import absoluteDirectory from './absoluteDirectory.mjs';
-import listDirectory from './listDirectory.mjs';
-import getUserDirectories from './getUserDirectories.mjs';
-import readDesktopDirectory from './readDesktopDirectory.mjs';
-import createEntry from './createEntry.mjs';
-import renameEntry from './renameEntry.mjs';
 import openFilePath from './openFilePath.mjs';
 import openFileWith from './openFileWith.mjs';
 import revealFilePath from './revealFilePath.mjs';
@@ -187,20 +179,11 @@ export default async function (request, context) {
       icon: await getProgramIcon(projectRoot, program.category, program.name),
     };
   }
-  if (request?.method === 'list-directory') {
-    return listDirectory(request.payload);
-  }
   if (request?.method === 'get-file-icon') {
     return getFileIcon(request.payload, context);
   }
   if (request?.method === 'get-file-icons') {
     return getFileIcons(request.payload, context);
-  }
-  if (request?.method === 'get-user-dirs') {
-    return getUserDirectories();
-  }
-  if (request?.method === 'read-desktop-directory') {
-    return readDesktopDirectory(request.payload);
   }
   if (request?.method === 'list-hidden-windows') {
     return listHiddenWindows(context);
@@ -241,15 +224,6 @@ export default async function (request, context) {
     }
     await openEverything();
     return { opened: true };
-  }
-  if (request?.method === 'create-folder') {
-    return createEntry(request.payload, 'folder');
-  }
-  if (request?.method === 'create-file') {
-    return createEntry(request.payload, 'file');
-  }
-  if (request?.method === 'rename-path') {
-    return renameEntry(request.payload);
   }
   if (request?.method === 'open-path') {
     return openFilePath(request.payload, context);
@@ -292,16 +266,6 @@ export default async function (request, context) {
     }
     state.desktopCutPaths = [];
     return { success: true };
-  }
-  if (request?.method === 'delete-path') {
-    const filePath = absoluteFilePath(request.payload?.path);
-    if (!path.basename(filePath)) throw new Error('Cannot delete a filesystem root');
-    await rm(filePath, { recursive: true, force: false });
-    return { success: true };
-  }
-  if (request?.method === 'parent-directory') {
-    const directory = absoluteDirectory(request.payload);
-    return path.dirname(directory);
   }
   throw new Error(`Unknown Node.js sidecar method: ${request?.method}`);
 }

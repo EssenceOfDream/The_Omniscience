@@ -2,6 +2,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import DEFAULT_THEME_SETTINGS from './DEFAULT_THEME_SETTINGS.mjs';
+import { startWindowsAppIconHost } from './windows-app-icon-host.mjs';
 import startFileServer from './startFileServer.mjs';
 import handleRequest from './handleRequest.mjs';
 
@@ -25,6 +26,9 @@ export default async function () {
   context.fileServerUrl = baseUrl;
   const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
   try {
+    if (process.platform === 'win32') {
+      context.windowsAppIconHost = startWindowsAppIconHost(projectRoot);
+    }
     for await (const line of input) {
       let request;
       try {
@@ -41,6 +45,7 @@ export default async function () {
     }
   } finally {
     context.nativeWindowHost?.close();
+    context.windowsAppIconHost?.close();
     server.close();
   }
 }

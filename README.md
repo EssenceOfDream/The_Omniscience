@@ -24,9 +24,10 @@ Windows executable, run `npm run build`; the resulting
 its runtime files. On first launch, the sidecar is extracted under the app's
 local AppData directory. WebView2 remains a Windows system requirement.
 
-The app builds the copied web assets, starts a persistent Node.js sidecar,
-and creates three separate workspace windows: a full-screen desktop, a top
-panel, and a window-control pad at the left edge. On Windows the 28-pixel panel
+The app builds the copied web assets, starts a persistent Node.js sidecar for
+the remaining Node-backed services, and creates three separate workspace
+windows: a full-screen desktop, a top panel, and a window-control pad at the
+left edge. On Windows the 28-pixel panel
 shows **Menu**, windows hidden from the taskbar, the clock, and search, settings,
 development, and power controls. Selecting a window brings it forward;
 middle-click closes it. Menu opens a separate overview window, leaving the panel
@@ -57,10 +58,14 @@ yet migrated. On Windows, **Hidden processes** lists native windows omitted from
 the taskbar and can focus or close them.
 The desktop window lists the user's Desktop directory and supports folder
 navigation, file/folder creation, renaming, and opening files through the OS.
-The **Files** section provides directory navigation, listing, folder/file
-creation, and rename operations through the same Node.js sidecar. It can also
-open componentapps with the supported frontend entrypoints in frameless Tauri
-windows. Creation and rename refuse to replace existing entries.
+On Windows, file icons are extracted through a persistent, prewarmed helper and
+cached for the lifetime of the sidecar, avoiding a PowerShell startup for every
+icon batch.
+The **Files** section uses the Rust host for directory navigation and listing,
+user-directory lookup, file/folder creation, rename, delete, and parent path
+resolution. It can also open componentapps with the supported frontend
+entrypoints in frameless Tauri windows. Creation and rename refuse to replace
+existing entries.
 The **Appearance** section configures the bundled `omni-theme` extension. Its
 Manifest V3 content scripts apply the existing color-processing engine to the
 shell and matching program windows.
@@ -115,9 +120,8 @@ program catalog, filesystem workflows, the extension-based theme, basic
 Manifest V3 content scripts and action popups, desktop file grid, and
 standalone webapp windows with basic lifecycle controls. Other app-specific
 legacy Electron IPC handlers still require a Tauri backend before their
-IPC-dependent features can work. The desktop grid does
-not yet have native file icons, media previews, or context-menu/drag
-integrations. A customizable desktop window layout, Windows desktop
+IPC-dependent features can work. The desktop grid does not yet have media
+previews or context-menu/drag integrations. A customizable desktop window layout, Windows desktop
 integration, broader Chromium API compatibility, and app-specific Electron IPC
 are still future work. Componentapps other than `create-item`, `rename`, and
 `windows-settings` are shown in the catalog but are not yet launchable. The

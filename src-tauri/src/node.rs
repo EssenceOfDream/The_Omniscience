@@ -3,6 +3,8 @@ use std::{
     path::PathBuf,
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{Arc, Mutex},
+    thread,
+    time::{Duration, Instant},
 };
 
 #[cfg(not(debug_assertions))]
@@ -12,28 +14,39 @@ use std::{
 };
 
 use serde_json::{Value, json};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
+
+mod filesystem;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub(crate) struct NodeRuntime {
     child: Child,
-    input: ChildStdin,
+    input: Option<ChildStdin>,
     output: BufReader<ChildStdout>,
     request_id: u64,
 }
 
 impl Drop for NodeRuntime {
     fn drop(&mut self) {
+        self.input.take();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(25));
+                }
+                _ => break,
+            }
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
 
 pub(crate) struct NodeBridge(pub(crate) Arc<Mutex<NodeRuntime>>);
-
-pub(crate) struct IconNodeBridge(pub(crate) Arc<Mutex<NodeRuntime>>);
 
 pub(crate) fn runtime_root(_app: &AppHandle) -> Result<PathBuf, String> {
     #[cfg(debug_assertions)]
@@ -206,7 +219,7 @@ pub(crate) fn start_node_bridge(app: &AppHandle) -> Result<NodeRuntime, String> 
 
     Ok(NodeRuntime {
         child,
-        input,
+        input: Some(input),
         output: BufReader::new(output),
         request_id: 0,
     })
@@ -228,13 +241,18 @@ pub(crate) fn request_node(
     runtime.request_id += 1;
     let request_id = runtime.request_id;
     let request = json!({ "id": request_id, "method": method, "payload": payload });
-    serde_json::to_writer(&mut runtime.input, &request)
-        .map_err(|error| format!("Could not encode sidecar request: {error}"))?;
-    runtime
-        .input
-        .write_all(b"\n")
-        .and_then(|_| runtime.input.flush())
-        .map_err(|error| format!("Could not send sidecar request: {error}"))?;
+    {
+        let input = runtime
+            .input
+            .as_mut()
+            .ok_or_else(|| "Node.js sidecar stdin is unavailable".to_string())?;
+        serde_json::to_writer(&mut *input, &request)
+            .map_err(|error| format!("Could not encode sidecar request: {error}"))?;
+        input
+            .write_all(b"\n")
+            .and_then(|_| input.flush())
+            .map_err(|error| format!("Could not send sidecar request: {error}"))?;
+    }
 
     let mut line = String::new();
     runtime
@@ -285,5 +303,8 @@ pub(crate) async fn node_request(
     method: String,
     payload: Value,
 ) -> Result<Value, String> {
+    if let Some(result) = filesystem::dispatch(&method, &payload)? {
+        return Ok(result);
+    }
     call_node(Arc::clone(&state.0), method, payload).await
 }

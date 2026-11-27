@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import readline from 'node:readline';
 import path from 'node:path';
 
-function normalizeWindowsPath(value) {
+export function normalizeWindowsPath(value) {
   if (value.startsWith('\\\\?\\UNC\\')) return `\\\\${value.slice(8)}`;
   if (value.startsWith('\\\\?\\')) return value.slice(4);
   return value;

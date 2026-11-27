@@ -13,6 +13,7 @@ import {
   listPrograms,
   startFileServer,
 } from './bridge.mjs';
+import extractWindowsAppIcons from './extractWindowsAppIcons.mjs';
 import { zipAndSplit } from '../componentapps/omni-archiver/zip.js';
 import buildComponentApps from '../main/vite_build.js';
 import { resolveForDisplay } from '../src/viewRuntime/paths.js';
@@ -1395,31 +1396,6 @@ test('serves local app pages without bypassing the extension content-script runt
   }
 });
 
-test('adapts Node directory data for the existing desktop file grid', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-tauri-'));
-  try {
-    await mkdir(path.join(root, 'folder'));
-    await writeFile(path.join(root, 'picture.png'), 'image');
-    const listing = await handleRequest({
-      method: 'read-desktop-directory',
-      payload: { path: root },
-    }, root);
-    assert.equal(listing.success, true);
-    assert.deepEqual(
-      listing.files.map(({ name, isDir, mediaKind }) => ({ name, isDir, mediaKind })),
-      [
-        { name: 'folder', isDir: true, mediaKind: null },
-        { name: 'picture.png', isDir: false, mediaKind: 'image' },
-      ],
-    );
-
-    const directories = await handleRequest({ method: 'get-user-dirs' }, root);
-    assert.equal(path.isAbsolute(directories.desktop), true);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 test('returns cached Windows shell icons for desktop files and folders', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'omni-desktop-icons-'));
   const filePath = path.join(root, 'sample.txt');
@@ -1486,6 +1462,28 @@ test('returns cached Windows shell icons for desktop files and folders', async (
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('uses the reusable Windows icon host for icon extraction batches', async () => {
+  const calls = [];
+  const context = {
+    windowsAppIconHost: {
+      async request(requests) {
+        calls.push(requests);
+        return requests.map(({ id }) => ({ id, dataUrl: `data:image/png;base64,${id}` }));
+      },
+    },
+  };
+  const requests = [{ id: 'one', path: 'C:\\one.txt' }];
+
+  const icons = await extractWindowsAppIcons(requests, context);
+
+  assert.deepEqual([...icons], [['one', {
+    id: 'one',
+    dataUrl: 'data:image/png;base64,one',
+  }]]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0], requests);
 });
 
 test('returns an explicit error for unknown sidecar methods', async () => {
@@ -1839,72 +1837,22 @@ test('opens built componentapps in trusted Tauri asset windows', async () => {
   }
 });
 
-test('lists, creates, and renames filesystem entries without overwriting', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-tauri-'));
-  try {
-    const folderPath = path.join(root, 'created-folder');
-    await handleRequest({
-      method: 'create-folder',
-      payload: { parentPath: root, name: 'created-folder' },
-    }, root);
-    await handleRequest({
-      method: 'create-file',
-      payload: { parentPath: folderPath, name: 'source.txt' },
-    }, root);
-    await writeFile(path.join(folderPath, 'source.txt'), 'preserve this');
-    await writeFile(path.join(folderPath, 'existing.txt'), 'do not replace');
-
+test('does not expose filesystem methods now handled by the Rust host', async () => {
+  for (const method of [
+    'list-directory',
+    'get-user-dirs',
+    'read-desktop-directory',
+    'create-folder',
+    'create-file',
+    'rename-path',
+    'delete-path',
+    'parent-directory',
+  ]) {
     await assert.rejects(
-      handleRequest({
-        method: 'create-file',
-        payload: { parentPath: folderPath, name: 'source.txt' },
-      }, root),
-      { code: 'EEXIST' },
+      handleRequest({ method, payload: {} }, 'C:\\Omniscience'),
+      /Unknown Node\.js sidecar method/,
+      `${method} should be routed by the Rust host`,
     );
-    await assert.rejects(
-      handleRequest({
-        method: 'rename-path',
-        payload: { path: path.join(folderPath, 'source.txt'), name: 'existing.txt' },
-      }, root),
-      /EEXIST/,
-    );
-
-    const renamedPath = path.join(folderPath, 'renamed.txt');
-    await handleRequest({
-      method: 'rename-path',
-      payload: { path: path.join(folderPath, 'source.txt'), name: 'renamed.txt' },
-    }, root);
-    assert.equal(await readFile(renamedPath, 'utf8'), 'preserve this');
-    await assert.rejects(stat(path.join(folderPath, 'source.txt')), { code: 'ENOENT' });
-
-    const listing = await handleRequest({
-      method: 'list-directory',
-      payload: { path: root },
-    }, root);
-    assert.equal(listing.entries[0].name, 'created-folder');
-    assert.equal(listing.entries[0].kind, 'directory');
-    assert.equal(listing.entries[0].path, folderPath);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('rejects relative paths and names that escape their parent directory', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'omni-tauri-'));
-  try {
-    await assert.rejects(
-      handleRequest({ method: 'list-directory', payload: { path: 'relative' } }, root),
-      /absolute directory path/,
-    );
-    await assert.rejects(
-      handleRequest({
-        method: 'create-folder',
-        payload: { parentPath: root, name: '..\\outside' },
-      }, root),
-      /Invalid file or folder name/,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
   }
 });
 

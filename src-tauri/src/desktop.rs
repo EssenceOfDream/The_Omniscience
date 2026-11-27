@@ -8,7 +8,7 @@ use tauri::{
 };
 
 use crate::{
-    node::{IconNodeBridge, call_node},
+    node::{NodeBridge, call_node},
     state::DesktopContextMenuState,
 };
 
@@ -203,7 +203,7 @@ pub(crate) fn show_desktop_context_menu(
 
 #[tauri::command]
 pub(crate) async fn get_file_icons(
-    state: State<'_, IconNodeBridge>,
+    state: State<'_, NodeBridge>,
     paths: Vec<String>,
 ) -> Result<Value, String> {
     call_node(

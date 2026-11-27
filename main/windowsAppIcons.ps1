@@ -90,89 +90,105 @@ $drawingAssembly = [Reflection.Assembly]::LoadWithPartialName('System.Drawing')
 if (-not $drawingAssembly) { throw 'System.Drawing is unavailable.' }
 Add-Type -TypeDefinition $iconSource -ReferencedAssemblies $drawingAssembly.Location -ErrorAction Stop
 $shell = New-Object -ComObject WScript.Shell
-$inputObject = ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd())
-$requests = $inputObject.requests
-if ($null -eq $requests) { $requests = @() }
-$results = @(
-    foreach ($request in $requests) {
-        $dataUrl = $null
-        $failure = $null
-        try {
-            $shortcutPath = [string]$request.path
-            $extension = [IO.Path]::GetExtension($shortcutPath).ToLowerInvariant()
-            $candidates = @()
+$shell = New-Object -ComObject WScript.Shell
+while ($line = [Console]::In.ReadLine()) {
+    try {
+        $inputObject = ConvertFrom-Json -InputObject $line
+        $requests = $inputObject.requests
+        if ($null -eq $requests) { $requests = @() }
+        $results = @(
+            foreach ($request in $requests) {
+                $dataUrl = $null
+                $failure = $null
+                try {
+                    $shortcutPath = [string]$request.path
+                    $extension = [IO.Path]::GetExtension($shortcutPath).ToLowerInvariant()
+                    $candidates = @()
 
-            if ($extension -eq '.lnk') {
-                $shortcut = $shell.CreateShortcut($shortcutPath)
-                $iconLocation = [string]$shortcut.IconLocation
-                if ($iconLocation -match '^(.*?)(?:,\s*(-?\d+))?$') {
-                    $candidatePath = [Environment]::ExpandEnvironmentVariables($matches[1].Trim().Trim('"'))
-                    $iconIndex = if ($matches[2]) { [int]$matches[2] } else { 0 }
-                    if ($candidatePath) {
-                        $candidates += @{ path = $candidatePath; index = $iconIndex }
-                    }
-                }
-                if ($shortcut.TargetPath) {
-                    $candidates += @{
-                        path = [Environment]::ExpandEnvironmentVariables([string]$shortcut.TargetPath)
-                        index = 0
-                    }
-                }
-            } elseif ($extension -eq '.url') {
-                $content = [IO.File]::ReadAllText($shortcutPath)
-                $iconMatch = [regex]::Match($content, '(?im)^\s*IconFile\s*=\s*(.+?)\s*$')
-                if ($iconMatch.Success) {
-                    $iconPath = [Environment]::ExpandEnvironmentVariables($iconMatch.Groups[1].Value.Trim().Trim('"'))
-                    $indexMatch = [regex]::Match($content, '(?im)^\s*IconIndex\s*=\s*(-?\d+)\s*$')
-                    $iconIndex = if ($indexMatch.Success) { [int]$indexMatch.Groups[1].Value } else { 0 }
-                    if ($iconPath) {
-                        if (-not [IO.Path]::IsPathRooted($iconPath)) {
-                            $iconPath = Join-Path (Split-Path -Parent $shortcutPath) $iconPath
+                    if ($extension -eq '.lnk') {
+                        $shortcut = $shell.CreateShortcut($shortcutPath)
+                        $iconLocation = [string]$shortcut.IconLocation
+                        if ($iconLocation -match '^(.*?)(?:,\s*(-?\d+))?$') {
+                            $candidatePath = [Environment]::ExpandEnvironmentVariables($matches[1].Trim().Trim('"'))
+                            $iconIndex = if ($matches[2]) { [int]$matches[2] } else { 0 }
+                            if ($candidatePath) {
+                                $candidates += @{ path = $candidatePath; index = $iconIndex }
+                            }
                         }
-                        $candidates += @{ path = $iconPath; index = $iconIndex }
+                        if ($shortcut.TargetPath) {
+                            $candidates += @{
+                                path = [Environment]::ExpandEnvironmentVariables([string]$shortcut.TargetPath)
+                                index = 0
+                            }
+                        }
+                    } elseif ($extension -eq '.url') {
+                        $content = [IO.File]::ReadAllText($shortcutPath)
+                        $iconMatch = [regex]::Match($content, '(?im)^\s*IconFile\s*=\s*(.+?)\s*$')
+                        if ($iconMatch.Success) {
+                            $iconPath = [Environment]::ExpandEnvironmentVariables($iconMatch.Groups[1].Value.Trim().Trim('"'))
+                            $indexMatch = [regex]::Match($content, '(?im)^\s*IconIndex\s*=\s*(-?\d+)\s*$')
+                            $iconIndex = if ($indexMatch.Success) { [int]$indexMatch.Groups[1].Value } else { 0 }
+                            if ($iconPath) {
+                                if (-not [IO.Path]::IsPathRooted($iconPath)) {
+                                    $iconPath = Join-Path (Split-Path -Parent $shortcutPath) $iconPath
+                                }
+                                $candidates += @{ path = $iconPath; index = $iconIndex }
+                            }
+                        }
                     }
+
+                    $candidates += @{ path = $shortcutPath; index = 0 }
+                    foreach ($candidate in $candidates) {
+                        $candidatePath = [string]$candidate.path
+                        if (-not (Test-Path -LiteralPath $candidatePath)) { continue }
+                        $candidateExtension = [IO.Path]::GetExtension($candidatePath).ToLowerInvariant()
+
+                        if ($candidateExtension -eq '.svg') {
+                            $svg = [IO.File]::ReadAllText($candidatePath)
+                            $dataUrl = 'data:image/svg+xml;base64,' + [Convert]::ToBase64String(
+                                [Text.Encoding]::UTF8.GetBytes($svg))
+                        } elseif ($candidateExtension -in @('.bmp', '.gif', '.jpeg', '.jpg', '.png', '.webp')) {
+                            $bytes = [IO.File]::ReadAllBytes($candidatePath)
+                            $mime = switch ($candidateExtension) {
+                                '.bmp' { 'image/bmp' }
+                                '.gif' { 'image/gif' }
+                                '.jpeg' { 'image/jpeg' }
+                                '.jpg' { 'image/jpeg' }
+                                '.png' { 'image/png' }
+                                '.webp' { 'image/webp' }
+                            }
+                            $dataUrl = "data:$mime;base64,$([Convert]::ToBase64String($bytes))"
+                        } else {
+                            $dataUrl = [OmniWindowsAppIcon]::ExtractDataUrl(
+                                $candidatePath, [int]$candidate.index)
+                            if (-not $dataUrl) {
+                                $dataUrl = [OmniWindowsAppIcon]::ExtractShellDataUrl($candidatePath)
+                            }
+                        }
+                        if ($dataUrl) { break }
+                    }
+                } catch {
+                    $failure = $_.Exception.Message
+                }
+
+                [PSCustomObject]@{
+                    id = [string]$request.id
+                    dataUrl = $dataUrl
+                    error = $failure
                 }
             }
-
-            $candidates += @{ path = $shortcutPath; index = 0 }
-            foreach ($candidate in $candidates) {
-                $candidatePath = [string]$candidate.path
-                if (-not (Test-Path -LiteralPath $candidatePath)) { continue }
-                $candidateExtension = [IO.Path]::GetExtension($candidatePath).ToLowerInvariant()
-
-                if ($candidateExtension -eq '.svg') {
-                    $svg = [IO.File]::ReadAllText($candidatePath)
-                    $dataUrl = 'data:image/svg+xml;base64,' + [Convert]::ToBase64String(
-                        [Text.Encoding]::UTF8.GetBytes($svg))
-                } elseif ($candidateExtension -in @('.bmp', '.gif', '.jpeg', '.jpg', '.png', '.webp')) {
-                    $bytes = [IO.File]::ReadAllBytes($candidatePath)
-                    $mime = switch ($candidateExtension) {
-                        '.bmp' { 'image/bmp' }
-                        '.gif' { 'image/gif' }
-                        '.jpeg' { 'image/jpeg' }
-                        '.jpg' { 'image/jpeg' }
-                        '.png' { 'image/png' }
-                        '.webp' { 'image/webp' }
-                    }
-                    $dataUrl = "data:$mime;base64,$([Convert]::ToBase64String($bytes))"
-                } else {
-                    $dataUrl = [OmniWindowsAppIcon]::ExtractDataUrl(
-                        $candidatePath, [int]$candidate.index)
-                    if (-not $dataUrl) {
-                        $dataUrl = [OmniWindowsAppIcon]::ExtractShellDataUrl($candidatePath)
-                    }
-                }
-                if ($dataUrl) { break }
-            }
-        } catch {
-            $failure = $_.Exception.Message
+        )
+        $response = [PSCustomObject]@{
+            requestId = $inputObject.requestId
+            success = $true
+            entries = $results
         }
-
-        [PSCustomObject]@{
-            id = [string]$request.id
-            dataUrl = $dataUrl
-            error = $failure
+    } catch {
+        $response = [PSCustomObject]@{
+            requestId = $inputObject.requestId
+            success = $false
+            error = $_.Exception.Message
         }
     }
-)
-ConvertTo-Json -InputObject $results -Compress -Depth 4
+    [Console]::Out.WriteLine((ConvertTo-Json -InputObject $response -Compress -Depth 4))
+}

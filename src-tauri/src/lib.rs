@@ -29,7 +29,7 @@ use crate::{
         EXTENSION_INIT_SCRIPT, build_extension_initialization_script, extension_storage_get,
         extension_storage_set, extension_target_for_webview,
     },
-    node::{IconNodeBridge, NodeBridge, node_request, request_node, start_node_bridge},
+    node::{NodeBridge, node_request, request_node, start_node_bridge},
     state::{
         ControlsCrossMode, DesktopContextMenuState, ProgramWindowIcons, ThemeSettingsState,
         WorkspaceGeometry,
@@ -74,10 +74,6 @@ pub fn run() {
                 std::io::Error::other("Chromium extensions were already initialized")
             })?;
             app.manage(NodeBridge(std::sync::Arc::new(std::sync::Mutex::new(runtime))));
-            let icon_runtime = start_node_bridge(app.handle()).map_err(std::io::Error::other)?;
-            app.manage(IconNodeBridge(std::sync::Arc::new(std::sync::Mutex::new(
-                icon_runtime,
-            ))));
             app.manage(ProgramWindowIcons(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )));
